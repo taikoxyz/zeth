@@ -35,7 +35,7 @@ elif [ "$chain" == "taiko_a6" ]; then
 elif [ "$chain" == "taiko_a7" ]; then
   rpc="https://rpc.hekla.taiko.xyz/"
   l1Rpc="https://l1rpc.hekla.taiko.xyz/"
-  beaconRpc="https://l1beacon.hekla.taiko.xyz"
+  beaconRpc="https://eth-holesky-beacon.public.blastapi.io"
 else
   echo "Invalid chain name. Please use 'ethereum', 'taiko_a6' or 'taiko_a7'."
   exit 1
