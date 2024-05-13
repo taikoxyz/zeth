@@ -6,6 +6,8 @@ This tutorial was created to assist you in setting up Raiko and its SGX dependen
 
 We recommended 4 cores and 8GB memory for running Raiko. 8 cores and 16GB memory is ideal; the bare minimum is 2 cores and 4GB memory (tentative).
 
+Additionally, a minimum allocation of 4GB for the "Enclave Page Cache Size" is recommended. You can check if your CPU supports this by visiting the following page: https://www.intel.com/content/www/us/en/architecture-and-technology/software-guard-extensions-processors.html
+
 ## Prerequisites
 
 Intel SGX is a technology that involves a considerable amount of configuration. Given its high level of configurability, the setup of your infrastructure may vary significantly depending on the attestation type (EPID, ECDSA) and other parameters. While we've strived to minimize the manual effort required to prepare the development environment, there are certain prerequisites that are challenging, if not impossible, to automate using Dockerfiles. This section outlines these prerequisites.
