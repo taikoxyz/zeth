@@ -13,7 +13,8 @@ use serde_with::serde_as;
 #[cfg(not(feature = "std"))]
 use crate::no_std::*;
 use crate::{
-    consts::ChainSpec, primitives::mpt::MptNode, prover::Proof, utils::zlib_compress_data,
+    consts::ChainSpec, primitives::mpt::MptNode, prover::Proof, utils::generate_transactions,
+    utils::zlib_compress_data,
 };
 
 /// Represents the state of an account's storage.
@@ -41,6 +42,43 @@ pub struct GuestInput {
     pub ancestor_headers: Vec<Header>,
     /// Taiko specific data
     pub taiko: TaikoGuestInput,
+}
+
+impl GuestInput {
+    pub fn get_original_txs(&self) -> Result<Vec<TransactionSigned>> {
+        // Generate the transactions from the tx list
+        let block_body = generate_transactions(
+            &self.chain_spec,
+            &self.taiko.block_proposed,
+            &self.taiko.tx_data,
+            &self.taiko.anchor_tx,
+        );
+
+        // txs from the block should be a valid subset of txs from L1
+        if Self::is_ordered_subset(&self.block.body, &block_body) {
+            Ok(block_body)
+        } else {
+            Err(anyhow!("mismatch txs between L1 & L2 block"))
+        }
+    }
+
+    fn is_ordered_subset<T: PartialEq>(a: &[T], b: &[T]) -> bool {
+        if a.len() > b.len() {
+            return false;
+        }
+
+        let mut b_idx = 0;
+        for a_item in a {
+            while b_idx < b.len() && &b[b_idx] != a_item {
+                b_idx += 1;
+            }
+            if b_idx >= b.len() {
+                return false;
+            }
+            b_idx += 1;
+        }
+        true
+    }
 }
 
 /// External aggregation input.

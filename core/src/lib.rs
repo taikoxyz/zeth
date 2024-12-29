@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     interfaces::{ProofRequest, RaikoError, RaikoResult},
-    preflight::{preflight, PreflightData},
+    preflight::{preflight, preflight_v2, PreflightData},
     provider::BlockDataProvider,
 };
 
@@ -31,6 +31,7 @@ pub struct Raiko {
     l1_chain_spec: ChainSpec,
     taiko_chain_spec: ChainSpec,
     request: ProofRequest,
+    v2_preflight: bool,
 }
 
 impl Raiko {
@@ -38,11 +39,13 @@ impl Raiko {
         l1_chain_spec: ChainSpec,
         taiko_chain_spec: ChainSpec,
         request: ProofRequest,
+        v2_preflight: bool,
     ) -> Self {
         Self {
             l1_chain_spec,
             taiko_chain_spec,
             request,
+            v2_preflight,
         }
     }
 
@@ -64,10 +67,41 @@ impl Raiko {
         &self,
         provider: BDP,
     ) -> RaikoResult<GuestInput> {
+        if self.v2_preflight {
+            self.generate_input_v2(provider).await
+        } else {
+            self.generate_input_v1(provider).await
+        }
+    }
+
+    // v1 uses the geth node & batched rpc calls
+    pub async fn generate_input_v1<BDP: BlockDataProvider>(
+        &self,
+        provider: BDP,
+    ) -> RaikoResult<GuestInput> {
         //TODO: read fork from config
         let preflight_data = self.get_preflight_data();
-        info!("Generating input for block {}", self.request.block_number);
+        info!(
+            "Generating v1(common-batch) input for block {}",
+            self.request.block_number
+        );
         preflight(provider, preflight_data)
+            .await
+            .map_err(Into::<RaikoError>::into)
+    }
+
+    // v2 uses the taiko node & single preflight rpc call together with the block rpc calls
+    pub async fn generate_input_v2<BDP: BlockDataProvider>(
+        &self,
+        provider: BDP,
+    ) -> RaikoResult<GuestInput> {
+        //TODO: read fork from config
+        let preflight_data = self.get_preflight_data();
+        info!(
+            "Generating v2(reth-preflight) input for block {}",
+            self.request.block_number
+        );
+        preflight_v2(provider, preflight_data)
             .await
             .map_err(Into::<RaikoError>::into)
     }
@@ -215,9 +249,14 @@ pub fn merge(a: &mut Value, b: &Value) {
 #[cfg(test)]
 mod tests {
     use crate::interfaces::aggregate_proofs;
-    use crate::{interfaces::ProofRequest, provider::rpc::RpcBlockDataProvider, ChainSpec, Raiko};
+    use crate::{
+        interfaces::ProofRequest,
+        provider::{BlockDataProviderType, RethPreflightBlockDataProvider, RpcBlockDataProvider},
+        ChainSpec, Raiko,
+    };
     use alloy_primitives::Address;
     use alloy_provider::Provider;
+    use env_logger;
     use raiko_lib::{
         consts::{Network, SupportedChainSpecs},
         input::{AggregationGuestInput, AggregationGuestOutput, BlobProofType},
@@ -288,10 +327,34 @@ mod tests {
         taiko_chain_spec: ChainSpec,
         proof_request: ProofRequest,
     ) -> Proof {
-        let provider =
-            RpcBlockDataProvider::new(&taiko_chain_spec.rpc, proof_request.block_number - 1)
-                .expect("Could not create RpcBlockDataProvider");
-        let raiko = Raiko::new(l1_chain_spec, taiko_chain_spec, proof_request.clone());
+        let v2_preflight = std::env::var("V2_PREFLIGHT")
+            .unwrap_or("false".to_string())
+            .parse()
+            .unwrap();
+        let provider = if v2_preflight {
+            let provider: RethPreflightBlockDataProvider = RethPreflightBlockDataProvider::new(
+                &taiko_chain_spec.rpc.clone(),
+                proof_request.block_number - 1,
+            )
+            .await
+            .expect("new RethPreflightBlockDataProvider should be ok");
+            BlockDataProviderType::PreflightRpc(provider)
+        } else {
+            let provider = RpcBlockDataProvider::new(
+                &taiko_chain_spec.rpc.clone(),
+                proof_request.block_number - 1,
+            )
+            .expect("new RpcBlockDataProvider should be ok");
+            BlockDataProviderType::CommonRpc(provider)
+        };
+
+        let raiko = Raiko::new(
+            l1_chain_spec,
+            taiko_chain_spec,
+            proof_request.clone(),
+            v2_preflight,
+        );
+
         let input = raiko
             .generate_input(provider)
             .await
@@ -335,6 +398,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_prove_block_taiko_a7() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
         let proof_type = get_proof_type_from_env();
         let l1_network = Network::Holesky.to_string();
         let network = Network::TaikoA7.to_string();

@@ -32,6 +32,36 @@ use crate::{
     require,
 };
 
+pub struct PreflightData {
+    pub block_number: u64,
+    pub l1_chain_spec: ChainSpec,
+    pub l1_inclusion_block_number: u64,
+    pub taiko_chain_spec: ChainSpec,
+    pub prover_data: TaikoProverData,
+    pub blob_proof_type: BlobProofType,
+}
+
+impl PreflightData {
+    pub fn new(
+        block_number: u64,
+        l1_inclusion_block_number: u64,
+        l1_chain_spec: ChainSpec,
+        taiko_chain_spec: ChainSpec,
+        prover_data: TaikoProverData,
+        blob_proof_type: BlobProofType,
+    ) -> Self {
+        Self {
+            block_number,
+            l1_chain_spec,
+            l1_inclusion_block_number,
+            taiko_chain_spec,
+            prover_data,
+            blob_proof_type,
+        }
+    }
+}
+
+
 /// Optimize data gathering by executing the transactions multiple times so data can be requested in batches
 pub async fn execute_txs<BDP>(builder: &mut RethBlockBuilder<ProviderDb<BDP>>) -> RaikoResult<()>
 where

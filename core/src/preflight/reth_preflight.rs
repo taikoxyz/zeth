@@ -1,26 +1,45 @@
-use std::collections::HashSet;
-
-use alloy_primitives::Bytes;
-use raiko_lib::{
-    builder::RethBlockBuilder,
-    input::{GuestInput, TaikoGuestInput},
-    primitives::mpt::proofs_to_tries,
-    Measurement,
-};
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     interfaces::{RaikoError, RaikoResult},
     provider::{db::ProviderDb, BlockDataProvider},
 };
+use alloy_primitives::{Bytes, B256};
+use alloy_rpc_types::eth::{
+    Block as AlloyEthBlock, EIP1186AccountProofResponse, Header as AlloyEthHeader,
+};
+use raiko_lib::{
+    builder::RethBlockBuilder,
+    input::{GuestInput},
+    primitives::mpt::proofs_to_tries,
+    Measurement,
+};
+use serde::{Deserialize, Serialize};
+use tracing::error;
 
-use util::{execute_txs, get_block_and_parent_data, prepare_taiko_chain_input};
+use crate::preflight::util::{
+    execute_txs, get_block_and_parent_data, prepare_taiko_chain_input, PreflightData,
+};
 
-mod reth_preflight;
-mod util;
-pub use reth_preflight::{preflight_v2, PreFlightRpcData};
-pub use util::PreflightData;
+/// `PreFlightRpcData` is the pre-flight data for the proving process.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreFlightRpcData {
+    /// The block to be proven.
+    // pub block: alloy_rpc_types_eth::Block,
+    pub block: AlloyEthBlock,
+    /// The parent header.
+    pub parent_header: AlloyEthHeader,
+    /// The account proofs.
+    pub account_proofs: Vec<EIP1186AccountProofResponse>,
+    /// The parent account proofs.
+    pub parent_account_proofs: Vec<EIP1186AccountProofResponse>,
+    /// The contracts used.
+    pub contracts: HashMap<B256, Bytes>,
+    /// The ancestor used.
+    pub ancestor_headers: Vec<AlloyEthHeader>,
+}
 
-pub async fn preflight<BDP: BlockDataProvider>(
+pub async fn preflight_v2<BDP: BlockDataProvider>(
     provider: BDP,
     PreflightData {
         block_number,
@@ -31,7 +50,7 @@ pub async fn preflight<BDP: BlockDataProvider>(
         l1_inclusion_block_number,
     }: PreflightData,
 ) -> RaikoResult<GuestInput> {
-    let measurement = Measurement::start("Fetching block data...", false);
+    let measurement = Measurement::start("Preflight_v2 fetching block data...", false);
 
     let (block, parent_block) = get_block_and_parent_data(&provider, block_number).await?;
 
@@ -47,9 +66,10 @@ pub async fn preflight<BDP: BlockDataProvider>(
         )
         .await?
     } else {
-        // For Ethereum blocks we just convert the block transactions in a tx_list
-        // so that we don't have to supports separate paths.
-        TaikoGuestInput::try_from(block.body.clone()).map_err(|e| RaikoError::Conversion(e.0))?
+        error!("preflight_v2 is used for taiko chain only");
+        return Err(RaikoError::Preflight(
+            "preflight_v2 is used for taiko chain only".to_owned(),
+        ));
     };
     measurement.stop();
 

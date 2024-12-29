@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::primitives::keccak::keccak;
 use crate::primitives::mpt::StateAccount;
-use crate::utils::generate_transactions;
 use crate::{
     consts::{ChainSpec, MAX_BLOCK_HASH_AGE},
     guest_mem_forget,
@@ -24,7 +23,9 @@ use reth_primitives::revm_primitives::db::{Database, DatabaseCommit};
 use reth_primitives::revm_primitives::{
     Account, AccountInfo, AccountStatus, Bytecode, Bytes, HashMap, SpecId,
 };
-use reth_primitives::{Address, BlockWithSenders, Header, B256, KECCAK_EMPTY, U256};
+use reth_primitives::{
+    Address, BlockWithSenders, Header, TransactionSigned, B256, KECCAK_EMPTY, U256,
+};
 use tracing::{debug, error};
 
 pub fn calculate_block_header(input: &GuestInput) -> Header {
@@ -60,6 +61,7 @@ pub struct RethBlockBuilder<DB> {
     pub chain_spec: ChainSpec,
     pub input: GuestInput,
     pub db: Option<DB>,
+    pub original_txs: Vec<TransactionSigned>,
 }
 
 impl<DB: Database<Error = ProviderError> + DatabaseCommit + OptimisticDatabase>
@@ -67,10 +69,15 @@ impl<DB: Database<Error = ProviderError> + DatabaseCommit + OptimisticDatabase>
 {
     /// Creates a new block builder.
     pub fn new(input: &GuestInput, db: DB) -> RethBlockBuilder<DB> {
+        // original tx comes from guest input L1 event, which should be a super set of input.block.body
+        let original_txs = input
+            .get_original_txs()
+            .expect("get_original_txs should success");
         RethBlockBuilder {
             chain_spec: input.chain_spec.clone(),
-            db: Some(db),
             input: input.clone(),
+            db: Some(db),
+            original_txs,
         }
     }
 
@@ -129,12 +136,7 @@ impl<DB: Database<Error = ProviderError> + DatabaseCommit + OptimisticDatabase>
 
         // Generate the transactions from the tx list
         let mut block = self.input.block.clone();
-        block.body = generate_transactions(
-            &self.input.chain_spec,
-            &self.input.taiko.block_proposed,
-            &self.input.taiko.tx_data,
-            &self.input.taiko.anchor_tx,
-        );
+        block.body = self.original_txs.clone();
         // Recover senders
         let mut block = block
             .with_recovered_senders()

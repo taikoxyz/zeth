@@ -2,7 +2,7 @@ use std::{fs::File, path::PathBuf};
 
 use raiko_core::{
     interfaces::RaikoError,
-    provider::{rpc::RpcBlockDataProvider, BlockDataProvider},
+    provider::{BlockDataProvider, BlockDataProviderType},
 };
 use raiko_lib::input::{get_input_path, GuestInput};
 use tracing::{debug, info};
@@ -42,7 +42,7 @@ pub fn set_input(
 
 pub async fn validate_input(
     cached_input: Option<GuestInput>,
-    provider: &RpcBlockDataProvider,
+    provider: &BlockDataProviderType,
 ) -> HostResult<GuestInput> {
     if let Some(cache_input) = cached_input {
         debug!("Using cached input");
@@ -113,6 +113,7 @@ mod test {
             l1_chain_spec.clone(),
             taiko_chain_spec.clone(),
             proof_request.clone(),
+            false,
         );
         let provider = RpcBlockDataProvider::new(
             &taiko_chain_spec.rpc.clone(),

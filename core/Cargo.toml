@@ -64,6 +64,7 @@ clap = { workspace = true }
 assert_cmd = { workspace = true }
 rstest = { workspace = true }
 ethers-core = { workspace = true }
+env_logger = { workspace = true }
 
 [features]
 # powdr = ["dep:powdr"]

@@ -6035,6 +6035,7 @@ dependencies = [
  "assert_cmd",
  "bincode",
  "clap 4.5.20",
+ "env_logger",
  "ethers-core 2.0.10",
  "kzg",
  "raiko-lib",

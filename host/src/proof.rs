@@ -8,7 +8,9 @@ use raiko_core::{
     interfaces::{
         aggregate_proofs, cancel_proof, AggregationOnlyRequest, ProofRequest, RaikoError,
     },
-    provider::{get_task_data, rpc::RpcBlockDataProvider},
+    provider::{
+        get_task_data, BlockDataProviderType, RethPreflightBlockDataProvider, RpcBlockDataProvider,
+    },
     Raiko,
 };
 use raiko_lib::{
@@ -503,15 +505,29 @@ pub async fn handle_proof(
     // Execute the proof generation.
     let total_time = Measurement::start("", false);
 
+    let v2_preflight = std::env::var("V2_PREFLIGHT").is_ok();
+    let provider = if v2_preflight {
+        BlockDataProviderType::PreflightRpc(
+            RethPreflightBlockDataProvider::new(
+                &taiko_chain_spec.rpc.clone(),
+                proof_request.block_number - 1,
+            )
+            .await?,
+        )
+    } else {
+        BlockDataProviderType::CommonRpc(RpcBlockDataProvider::new(
+            &taiko_chain_spec.rpc.clone(),
+            proof_request.block_number - 1,
+        )?)
+    };
+
     let raiko = Raiko::new(
         l1_chain_spec.clone(),
         taiko_chain_spec.clone(),
         proof_request.clone(),
+        v2_preflight,
     );
-    let provider = RpcBlockDataProvider::new(
-        &taiko_chain_spec.rpc.clone(),
-        proof_request.block_number - 1,
-    )?;
+
     let input = match cache::validate_input(cached_input, &provider).await {
         Ok(cache_input) => cache_input,
         Err(_) => {
