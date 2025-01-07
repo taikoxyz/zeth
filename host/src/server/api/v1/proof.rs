@@ -1,6 +1,5 @@
 use axum::{debug_handler, extract::State, routing::post, Json, Router};
 use raiko_core::interfaces::ProofRequest;
-use raiko_tasks::get_task_manager;
 use serde_json::Value;
 use utoipa::OpenApi;
 
@@ -8,7 +7,10 @@ use crate::{
     interfaces::HostResult,
     metrics::{dec_current_req, inc_current_req, inc_guest_req_count, inc_host_req_count},
     proof::handle_proof,
-    server::api::{util::ensure_not_paused, v1::Status},
+    server::api::{
+        util::{ensure_not_paused, ensure_proof_request_image_id},
+        v1::Status,
+    },
     ProverState,
 };
 
@@ -43,12 +45,14 @@ async fn proof_handler(
     let mut config = prover_state.request_config();
     config.merge(&req)?;
 
+    ensure_proof_request_image_id(&mut config)?;
+
     // Construct the actual proof request from the available configs.
     let proof_request = ProofRequest::try_from(config)?;
     inc_host_req_count(proof_request.block_number);
     inc_guest_req_count(&proof_request.proof_type, proof_request.block_number);
 
-    let mut manager = get_task_manager(&prover_state.opts.clone().into());
+    let mut manager = prover_state.task_manager();
 
     handle_proof(
         &proof_request,

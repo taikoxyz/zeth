@@ -38,6 +38,7 @@ kzg_traits = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { workspace = true }
 rlp = { workspace = true, features = ["std"] }
+bytemuck = { workspace = true }
 
 # docs
 utoipa = { workspace = true }

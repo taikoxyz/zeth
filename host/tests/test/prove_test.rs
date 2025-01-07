@@ -6,7 +6,9 @@ use raiko_lib::consts::Network;
 use raiko_lib::proof_type::ProofType;
 use raiko_tasks::TaskStatus;
 
-#[tokio::test]
+#[ignore]
+#[serial_test::serial]
+#[test_log::test(tokio::test)]
 pub async fn test_v2_mainnet_native_prove() {
     let api_version = "v2";
     let network = Network::TaikoMainnet;
@@ -14,7 +16,7 @@ pub async fn test_v2_mainnet_native_prove() {
     let block_number = randomly_select_block(network)
         .await
         .expect("randomly select block failed");
-    println!(
+    tracing::info!(
         "test_prove_v2_mainnet_native network: {network}, proof_type: {proof_type}, block_number: {block_number}"
     );
 

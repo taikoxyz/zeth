@@ -46,6 +46,11 @@ if [ "$CPU_OPT" = "1" ]; then
     echo "Enable cpu optimization with host RUSTFLAGS"
 fi
 
+# install cargo-nextest if not installed
+if ! cargo nextest --version >/dev/null 2>&1; then
+    cargo install cargo-nextest@0.9.85 --locked
+fi
+
 # NATIVE
 if [ -z "$1" ] || [ "$1" == "native" ]; then
     if [ -n "${CLIPPY}" ]; then

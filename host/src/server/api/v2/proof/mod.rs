@@ -7,7 +7,10 @@ use utoipa::OpenApi;
 use crate::{
     interfaces::HostResult,
     metrics::{inc_current_req, inc_guest_req_count, inc_host_req_count},
-    server::api::{util::ensure_not_paused, v2::Status},
+    server::api::{
+        util::{ensure_not_paused, ensure_proof_request_image_id},
+        v2::Status,
+    },
     Message, ProverState,
 };
 
@@ -45,6 +48,13 @@ async fn proof_handler(
     let mut config = prover_state.request_config();
     config.merge(&req)?;
 
+    // TODO: remove this assert after we support custom image_id for RISC0/SP1 proof type
+    assert!(
+        config.image_id.is_none(),
+        "currently we don't support custom image_id for RISC0/SP1 proof type"
+    );
+    ensure_proof_request_image_id(&mut config)?;
+
     // Construct the actual proof request from the available configs.
     let proof_request = ProofRequest::try_from(config)?;
     inc_host_req_count(proof_request.block_number);
@@ -57,16 +67,23 @@ async fn proof_handler(
     )
     .await?;
 
-    let key = ProofTaskDescriptor::from((
+    let key = ProofTaskDescriptor::new(
         chain_id,
         proof_request.block_number,
         blockhash,
         proof_request.proof_type,
         proof_request.prover.to_string(),
-    ));
+        proof_request.image_id.clone(),
+    );
 
     let mut manager = prover_state.task_manager();
     let status = manager.get_task_proving_status(&key).await?;
+    tracing::info!(
+        "/v2/proof, request: {:?}, status: {:?}",
+        proof_request,
+        status
+    );
+
     match status.0.last() {
         Some((latest_status, ..)) => {
             match latest_status {

@@ -9,7 +9,10 @@ use raiko_lib::{
         ZkAggregationGuestInput,
     },
     proof_type::ProofType,
-    prover::{IdStore, IdWrite, Proof, ProofKey, Prover, ProverConfig, ProverError, ProverResult},
+    prover::{
+        encode_image_id, IdStore, IdWrite, Proof, ProofKey, Prover, ProverConfig, ProverError,
+        ProverResult,
+    },
     Measurement,
 };
 use reth_primitives::B256;
@@ -30,9 +33,6 @@ use tracing::{debug, error, info};
 
 mod proof_verify;
 use proof_verify::remote_contract_verify::verify_sol_by_contract_call;
-
-pub const ELF: &[u8] = include_bytes!("../../guest/elf/sp1-guest");
-pub const AGGREGATION_ELF: &[u8] = include_bytes!("../../guest/elf/sp1-aggregation");
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -129,6 +129,7 @@ impl Prover for Sp1Prover {
         let mut stdin = SP1Stdin::new();
         stdin.write(&input);
 
+        let (elf, image_id) = Self::current_proving_image();
         let Sp1ProverClient { client, pk, vk } = BLOCK_PROOF_CLIENT
             .entry(mode.clone())
             .or_insert_with(|| {
@@ -139,20 +140,16 @@ impl Prover for Sp1Prover {
                 };
 
                 let client = Arc::new(base_client);
-                let (pk, vk) = client.setup(ELF);
+                let (pk, vk) = client.setup(elf);
                 info!(
-                    "new client and setup() for block {:?}.",
-                    output.header.number
+                    "Sp1 Prover: block {:?} with vk {:?} image_id {}",
+                    output.header.number,
+                    vk.bytes32(),
+                    encode_image_id(image_id)
                 );
                 Sp1ProverClient { client, pk, vk }
             })
             .clone();
-
-        info!(
-            "Sp1 Prover: block {:?} with vk {:?}",
-            output.header.number,
-            vk.bytes32()
-        );
 
         let prove_action = action::Prove::new(client.prover.as_ref(), &pk, stdin.clone());
         let prove_result = if !matches!(mode, ProverMode::Network) {
@@ -167,7 +164,7 @@ impl Prover for Sp1Prover {
             let network_prover = NetworkProver::new();
 
             let proof_id = network_prover
-                .request_proof(ELF, stdin, param.recursion.clone().into())
+                .request_proof(elf, stdin, param.recursion.clone().into())
                 .await
                 .map_err(|e| {
                     ProverError::GuestError(format!("Sp1: requesting proof failed: {e}"))
@@ -323,7 +320,9 @@ impl Prover for Sp1Prover {
                     .unwrap_or_else(ProverClient::new);
 
                 let client = Arc::new(base_client);
-                let (pk, vk) = client.setup(AGGREGATION_ELF);
+                let (aggregation_elf, _) = Self::current_aggregation_image();
+                let (pk, vk) = client.setup(aggregation_elf);
+
                 info!(
                     "new client and setup() for aggregation based on {:?} proofs with vk {:?}",
                     input.proofs.len(),
@@ -379,6 +378,32 @@ impl Prover for Sp1Prover {
             }
             .into(),
         )
+    }
+
+    fn current_proving_image() -> (&'static [u8], &'static [u32; 8]) {
+        const PROVING_ELF: &[u8] = include_bytes!("../../guest/elf/sp1-guest");
+
+        static PROVING_IMAGE_ID: once_cell::sync::Lazy<[u32; 8]> =
+            once_cell::sync::Lazy::new(|| {
+                let local_client = ProverClient::local();
+                let (_, vk) = local_client.setup(PROVING_ELF);
+                vk.hash_u32()
+            });
+
+        (PROVING_ELF, &PROVING_IMAGE_ID)
+    }
+
+    fn current_aggregation_image() -> (&'static [u8], &'static [u32; 8]) {
+        static AGGREGATION_ELF: &[u8] = include_bytes!("../../guest/elf/sp1-aggregation");
+
+        static AGGREGATION_IMAGE_ID: once_cell::sync::Lazy<[u32; 8]> =
+            once_cell::sync::Lazy::new(|| {
+                let local_client = ProverClient::local();
+                let (_, vk) = local_client.setup(AGGREGATION_ELF);
+                vk.hash_u32()
+            });
+
+        (AGGREGATION_ELF, &AGGREGATION_IMAGE_ID)
     }
 }
 

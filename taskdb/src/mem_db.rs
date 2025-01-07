@@ -7,10 +7,7 @@
 
 // Imports
 // ----------------------------------------------------------------
-use std::{
-    collections::HashMap,
-    sync::{Arc, Once},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
 use raiko_core::interfaces::AggregationOnlyRequest;
@@ -24,7 +21,7 @@ use crate::{
     TaskReport, TaskStatus,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InMemoryTaskManager {
     db: Arc<Mutex<InMemoryTaskDb>>,
 }
@@ -138,7 +135,11 @@ impl InMemoryTaskDb {
             .filter_map(|(desc, statuses)| {
                 statuses.0.last().map(|s| {
                     (
-                        TaskDescriptor::Aggregation(AggregationTaskDescriptor::from(desc)),
+                        TaskDescriptor::Aggregation(
+                            AggregationTaskDescriptor::try_from(desc).expect(
+                                "invalid AggregationOnlyRequest detected in Memory DB, please report this issue",
+                            ),
+                        ),
                         s.0.clone(),
                     )
                 })
@@ -300,8 +301,9 @@ impl IdStore for InMemoryTaskManager {
 
 #[async_trait::async_trait]
 impl TaskManager for InMemoryTaskManager {
+    #[cfg(not(test))]
     fn new(_opts: &TaskManagerOpts) -> Self {
-        static INIT: Once = Once::new();
+        static INIT: std::sync::Once = std::sync::Once::new();
         static mut SHARED_TASK_MANAGER: Option<Arc<Mutex<InMemoryTaskDb>>> = None;
 
         INIT.call_once(|| {
@@ -312,8 +314,17 @@ impl TaskManager for InMemoryTaskManager {
             }
         });
 
+        tracing::info!("InMemoryTaskManager created not test");
         InMemoryTaskManager {
             db: unsafe { SHARED_TASK_MANAGER.clone().unwrap() },
+        }
+    }
+
+    #[cfg(test)]
+    fn new(_opts: &TaskManagerOpts) -> Self {
+        tracing::info!("InMemoryTaskManager created test");
+        InMemoryTaskManager {
+            db: Arc::new(Mutex::new(InMemoryTaskDb::new())),
         }
     }
 
@@ -438,13 +449,14 @@ mod tests {
     #[test]
     fn test_db_enqueue() {
         let mut db = InMemoryTaskDb::new();
-        let params = ProofTaskDescriptor {
-            chain_id: 1,
-            block_id: 1,
-            blockhash: B256::default(),
-            proof_system: ProofType::Native,
-            prover: "0x1234".to_owned(),
-        };
+        let params = ProofTaskDescriptor::new(
+            1,
+            1,
+            B256::default(),
+            ProofType::Native,
+            "0x1234".to_owned(),
+            None,
+        );
         db.enqueue_task(&params).expect("enqueue task");
         let status = db.get_task_proving_status(&params);
         assert!(status.is_ok());

@@ -48,7 +48,7 @@ impl std::str::FromStr for ProofType {
             "sp1" => Ok(ProofType::Sp1),
             "sgx" => Ok(ProofType::Sgx),
             "risc0" => Ok(ProofType::Risc0),
-            _ => Err(format!("Unknown proof type {}", s)),
+            _ => Err(format!("Unknown proof type: {}", s)),
         }
     }
 }

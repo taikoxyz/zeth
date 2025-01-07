@@ -108,6 +108,7 @@ mod test {
             blob_proof_type: BlobProofType::KzgVersionedHash,
             prover_args: Default::default(),
             l1_inclusion_block_number: 0,
+            image_id: None,
         };
         let raiko = Raiko::new(
             l1_chain_spec.clone(),
@@ -137,7 +138,8 @@ mod test {
         provider.provider.get_block_number().await.unwrap()
     }
 
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_generate_input_from_cache() {
         let l1 = &Network::Holesky.to_string();
         let l2 = &Network::TaikoA7.to_string();

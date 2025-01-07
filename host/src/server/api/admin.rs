@@ -29,7 +29,8 @@ mod tests {
     use std::path::PathBuf;
     use tower::ServiceExt;
 
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_pause() {
         let opts = {
             let mut opts = crate::Opts::parse();
@@ -54,7 +55,8 @@ mod tests {
         assert!(state.is_paused());
     }
 
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_pause_when_already_paused() {
         let opts = {
             let mut opts = crate::Opts::parse();
@@ -82,7 +84,8 @@ mod tests {
         assert!(state.is_paused());
     }
 
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_unpause() {
         let opts = {
             let mut opts = crate::Opts::parse();

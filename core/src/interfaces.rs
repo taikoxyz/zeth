@@ -79,6 +79,58 @@ impl From<raiko_lib::mem_db::DbError> for RaikoError {
 
 pub type RaikoResult<T> = Result<T, RaikoError>;
 
+/// Get the proving image for a given proof type.
+pub fn get_proving_image(proof_type: ProofType) -> RaikoResult<(&'static [u8], &'static [u32; 8])> {
+    match proof_type {
+        ProofType::Native => Ok(NativeProver::current_proving_image()),
+        ProofType::Sp1 => {
+            #[cfg(feature = "sp1")]
+            return Ok(sp1_driver::Sp1Prover::current_proving_image());
+            #[cfg(not(feature = "sp1"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+        ProofType::Risc0 => {
+            #[cfg(feature = "risc0")]
+            return Ok(risc0_driver::Risc0Prover::current_proving_image());
+            #[cfg(not(feature = "risc0"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+        ProofType::Sgx => {
+            #[cfg(feature = "sgx")]
+            return Ok(sgx_prover::SgxProver::current_proving_image());
+            #[cfg(not(feature = "sgx"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+    }
+}
+
+/// Get the aggregation image for a given proof type.
+pub fn get_aggregation_image(
+    proof_type: ProofType,
+) -> RaikoResult<(&'static [u8], &'static [u32; 8])> {
+    match proof_type {
+        ProofType::Native => Ok(NativeProver::current_aggregation_image()),
+        ProofType::Sp1 => {
+            #[cfg(feature = "sp1")]
+            return Ok(sp1_driver::Sp1Prover::current_aggregation_image());
+            #[cfg(not(feature = "sp1"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+        ProofType::Risc0 => {
+            #[cfg(feature = "risc0")]
+            return Ok(risc0_driver::Risc0Prover::current_aggregation_image());
+            #[cfg(not(feature = "risc0"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+        ProofType::Sgx => {
+            #[cfg(feature = "sgx")]
+            return Ok(sgx_prover::SgxProver::current_aggregation_image());
+            #[cfg(not(feature = "sgx"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+    }
+}
+
 /// Run the prover driver depending on the proof type.
 pub async fn run_prover(
     proof_type: ProofType,
@@ -217,6 +269,8 @@ pub struct ProofRequest {
     pub proof_type: ProofType,
     /// Blob proof type.
     pub blob_proof_type: BlobProofType,
+    /// The guest image id for RISC0/SP1 provers.
+    pub image_id: Option<String>,
     #[serde(flatten)]
     /// Additional prover params.
     pub prover_args: HashMap<String, Value>,
@@ -251,6 +305,9 @@ pub struct ProofRequestOpt {
     pub proof_type: Option<String>,
     /// Blob proof type.
     pub blob_proof_type: Option<String>,
+    #[arg(long, require_equals = true)]
+    /// The guest image id for RISC0/SP1 provers.
+    pub image_id: Option<String>,
     #[command(flatten)]
     #[serde(flatten)]
     /// Any additional prover params in JSON format.
@@ -310,6 +367,24 @@ impl TryFrom<ProofRequestOpt> for ProofRequest {
     type Error = RaikoError;
 
     fn try_from(value: ProofRequestOpt) -> Result<Self, Self::Error> {
+        let proof_type = value
+            .proof_type
+            .as_ref()
+            .ok_or(RaikoError::InvalidRequestConfig(
+                "Missing proof_type".to_string(),
+            ))?
+            .parse()
+            .map_err(|_| RaikoError::InvalidRequestConfig("Invalid proof_type".to_string()))?;
+
+        // Check if we need an image ID for this proof type
+        let image_id = match &proof_type {
+            ProofType::Risc0 | ProofType::Sp1 => value
+                .image_id
+                .clone()
+                .ok_or_else(|| RaikoError::InvalidRequestConfig("Missing image_id".to_string()))?,
+            _ => value.image_id.unwrap_or_default(),
+        };
+
         Ok(Self {
             block_number: value.block_number.ok_or(RaikoError::InvalidRequestConfig(
                 "Missing block number".to_string(),
@@ -335,13 +410,7 @@ impl TryFrom<ProofRequestOpt> for ProofRequest {
                 ))?
                 .parse()
                 .map_err(|_| RaikoError::InvalidRequestConfig("Invalid prover".to_string()))?,
-            proof_type: value
-                .proof_type
-                .ok_or(RaikoError::InvalidRequestConfig(
-                    "Missing proof_type".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| RaikoError::InvalidRequestConfig("Invalid proof_type".to_string()))?,
+            proof_type,
             blob_proof_type: value
                 .blob_proof_type
                 .unwrap_or("proof_of_equivalence".to_string())
@@ -349,6 +418,7 @@ impl TryFrom<ProofRequestOpt> for ProofRequest {
                 .map_err(|_| {
                     RaikoError::InvalidRequestConfig("Invalid blob_proof_type".to_string())
                 })?,
+            image_id: Some(image_id),
             prover_args: value.prover_args.into(),
         })
     }
@@ -372,6 +442,8 @@ pub struct AggregationRequest {
     pub proof_type: Option<String>,
     /// Blob proof type.
     pub blob_proof_type: Option<String>,
+    /// The guest image id for RISC0/SP1 provers.
+    pub image_id: Option<String>,
     #[serde(flatten)]
     /// Any additional prover params in JSON format.
     pub prover_args: ProverSpecificOpts,
@@ -403,6 +475,7 @@ impl From<AggregationRequest> for Vec<ProofRequestOpt> {
                     prover: value.prover.clone(),
                     proof_type: value.proof_type.clone(),
                     blob_proof_type: value.blob_proof_type.clone(),
+                    image_id: value.image_id.clone(),
                     prover_args: value.prover_args.clone(),
                 },
             )
@@ -426,7 +499,20 @@ impl From<ProofRequestOpt> for AggregationRequest {
             prover: value.prover,
             proof_type: value.proof_type,
             blob_proof_type: value.blob_proof_type,
+            image_id: value.image_id,
             prover_args: value.prover_args,
+        }
+    }
+}
+
+impl From<(AggregationRequest, Vec<Proof>)> for AggregationOnlyRequest {
+    fn from((request, proofs): (AggregationRequest, Vec<Proof>)) -> Self {
+        Self {
+            proofs,
+            aggregation_ids: request.block_numbers.iter().map(|(id, _)| *id).collect(),
+            proof_type: request.proof_type,
+            image_id: request.image_id,
+            prover_args: request.prover_args,
         }
     }
 }
@@ -441,6 +527,7 @@ pub struct AggregationOnlyRequest {
     pub proofs: Vec<Proof>,
     /// The proof type.
     pub proof_type: Option<String>,
+    pub image_id: Option<String>,
     #[serde(flatten)]
     /// Any additional prover params in JSON format.
     pub prover_args: ProverSpecificOpts,
@@ -452,17 +539,6 @@ impl Display for AggregationOnlyRequest {
             "AggregationOnlyRequest {{{:?}, {:?}}}",
             self.aggregation_ids, self.proof_type
         ))
-    }
-}
-
-impl From<(AggregationRequest, Vec<Proof>)> for AggregationOnlyRequest {
-    fn from((request, proofs): (AggregationRequest, Vec<Proof>)) -> Self {
-        Self {
-            proofs,
-            aggregation_ids: request.block_numbers.iter().map(|(id, _)| *id).collect(),
-            proof_type: request.proof_type,
-            prover_args: request.prover_args,
-        }
     }
 }
 

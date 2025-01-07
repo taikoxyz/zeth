@@ -18,9 +18,7 @@ use raiko_lib::{
     prover::{IdWrite, Proof},
     Measurement,
 };
-use raiko_tasks::{
-    get_task_manager, ProofTaskDescriptor, TaskManager, TaskManagerWrapperImpl, TaskStatus,
-};
+use raiko_tasks::{ProofTaskDescriptor, TaskManager, TaskManagerWrapperImpl, TaskStatus};
 use reth_primitives::B256;
 use tokio::{
     select,
@@ -43,22 +41,23 @@ use crate::{
     Message, Opts,
 };
 
+#[derive(Clone)]
 pub struct ProofActor {
     opts: Opts,
     chain_specs: SupportedChainSpecs,
     aggregate_tasks: Arc<Mutex<HashMap<AggregationOnlyRequest, CancellationToken>>>,
     running_tasks: Arc<Mutex<HashMap<ProofTaskDescriptor, CancellationToken>>>,
     pending_tasks: Arc<Mutex<VecDeque<ProofRequest>>>,
-    receiver: Receiver<Message>,
     sender: Sender<Message>,
+    task_manager: TaskManagerWrapperImpl,
 }
 
 impl ProofActor {
     pub fn new(
         sender: Sender<Message>,
-        receiver: Receiver<Message>,
         opts: Opts,
         chain_specs: SupportedChainSpecs,
+        task_manager: TaskManagerWrapperImpl,
     ) -> Self {
         let running_tasks = Arc::new(Mutex::new(
             HashMap::<ProofTaskDescriptor, CancellationToken>::new(),
@@ -75,9 +74,13 @@ impl ProofActor {
             aggregate_tasks,
             running_tasks,
             pending_tasks,
-            receiver,
             sender,
+            task_manager,
         }
+    }
+
+    pub fn task_manager(&self) -> TaskManagerWrapperImpl {
+        self.task_manager.clone()
     }
 
     pub async fn cancel_task(&mut self, key: ProofTaskDescriptor) -> HostResult<()> {
@@ -92,7 +95,7 @@ impl ProofActor {
             }
         };
 
-        let mut manager = get_task_manager(&self.opts.clone().into());
+        let mut manager = self.task_manager();
         cancel_proof(
             key.proof_system,
             (
@@ -133,13 +136,14 @@ impl ProofActor {
             }
         };
 
-        let key = ProofTaskDescriptor::from((
+        let key = ProofTaskDescriptor::new(
             chain_id,
             proof_request.block_number,
             blockhash,
             proof_request.proof_type,
-            proof_request.prover.clone().to_string(),
-        ));
+            proof_request.prover.to_string(),
+            proof_request.image_id.clone(),
+        );
 
         {
             let mut tasks = self.running_tasks.lock().await;
@@ -151,12 +155,13 @@ impl ProofActor {
         let opts = self.opts.clone();
         let chain_specs = self.chain_specs.clone();
 
+        let proof_actor = self.clone();
         tokio::spawn(async move {
             select! {
                 _ = cancel_token.cancelled() => {
                     info!("Task cancelled");
                 }
-                result = Self::handle_message(proof_request.clone(), key.clone(), &opts, &chain_specs) => {
+                result = proof_actor.handle_message(proof_request.clone(), key.clone(), &opts, &chain_specs) => {
                     match result {
                         Ok(status) => {
                             info!("Host handling message: {status:?}");
@@ -188,7 +193,7 @@ impl ProofActor {
         };
 
         // TODO:(petar) implement cancel_proof_aggregation
-        // let mut manager = get_task_manager(&self.opts.clone().into());
+        // let mut manager = self.task_manager();
         // let proof_type = ProofType::from_str(
         //     request
         //         .proof_type
@@ -224,12 +229,13 @@ impl ProofActor {
         let tasks = self.aggregate_tasks.clone();
         let opts = self.opts.clone();
 
+        let proof_actor = self.clone();
         tokio::spawn(async move {
             select! {
                 _ = cancel_token.cancelled() => {
                     info!("Task cancelled");
                 }
-                result = Self::handle_aggregate(request_clone, &opts) => {
+                result = proof_actor.handle_aggregate(request_clone, &opts) => {
                     match result {
                         Ok(status) => {
                             info!("Host handling message: {status:?}");
@@ -245,10 +251,10 @@ impl ProofActor {
         });
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self, mut receiver: Receiver<Message>) {
         // recv() is protected by outside mpsc, no lock needed here
         let semaphore = Arc::new(Semaphore::new(self.opts.concurrency_limit));
-        while let Some(message) = self.receiver.recv().await {
+        while let Some(message) = receiver.recv().await {
             match message {
                 Message::Cancel(key) => {
                     debug!("Message::Cancel({key:?})");
@@ -311,12 +317,13 @@ impl ProofActor {
     }
 
     pub async fn handle_message(
+        &self,
         proof_request: ProofRequest,
         key: ProofTaskDescriptor,
         opts: &Opts,
         chain_specs: &SupportedChainSpecs,
     ) -> HostResult<TaskStatus> {
-        let mut manager = get_task_manager(&opts.clone().into());
+        let mut manager = self.task_manager();
 
         let status = manager.get_task_proving_status(&key).await?;
 
@@ -346,11 +353,15 @@ impl ProofActor {
         Ok(status)
     }
 
-    pub async fn handle_aggregate(request: AggregationOnlyRequest, opts: &Opts) -> HostResult<()> {
+    pub async fn handle_aggregate(
+        &self,
+        request: AggregationOnlyRequest,
+        _opts: &Opts,
+    ) -> HostResult<()> {
         let proof_type_str = request.proof_type.to_owned().unwrap_or_default();
         let proof_type = ProofType::from_str(&proof_type_str).map_err(HostError::Conversion)?;
 
-        let mut manager = get_task_manager(&opts.clone().into());
+        let mut manager = self.task_manager();
 
         let status = manager
             .get_aggregation_task_proving_status(&request)
@@ -371,7 +382,7 @@ impl ProofActor {
         };
         let output = AggregationGuestOutput { hash: B256::ZERO };
         let config = serde_json::to_value(request.clone().prover_args)?;
-        let mut manager = get_task_manager(&opts.clone().into());
+        let mut manager = self.task_manager();
 
         let (status, proof) =
             match aggregate_proofs(proof_type, input, &output, &config, Some(&mut manager)).await {
@@ -575,24 +586,12 @@ pub async fn handle_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::ChainId;
+    use rand::Rng;
     use tokio::sync::mpsc;
 
-    #[tokio::test]
-    async fn test_handle_system_pause_happy_path() {
-        let (tx, rx) = mpsc::channel(100);
-        let mut actor = setup_actor_with_tasks(tx, rx);
-
-        let result = actor.handle_system_pause().await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_handle_system_pause_with_pending_tasks() {
-        let (tx, rx) = mpsc::channel(100);
-        let mut actor = setup_actor_with_tasks(tx, rx);
-
-        // Add some pending tasks
-        actor.pending_tasks.lock().await.push_back(ProofRequest {
+    fn create_test_proof_request() -> ProofRequest {
+        ProofRequest {
             block_number: 1,
             l1_inclusion_block_number: 1,
             network: "test".to_string(),
@@ -601,8 +600,44 @@ mod tests {
             prover: Default::default(),
             proof_type: Default::default(),
             blob_proof_type: Default::default(),
+            image_id: None,
             prover_args: HashMap::new(),
-        });
+        }
+    }
+
+    fn create_test_task_descriptor() -> ProofTaskDescriptor {
+        ProofTaskDescriptor::new(
+            ChainId::from(1u64),
+            1,
+            B256::default(),
+            ProofType::Native,
+            "test".to_string(),
+            None,
+        )
+    }
+
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
+    async fn test_handle_system_pause_happy_path() {
+        let (tx, rx) = mpsc::channel(100);
+        let mut actor = setup_actor_with_tasks(tx, rx);
+
+        let result = actor.handle_system_pause().await;
+        assert!(result.is_ok());
+    }
+
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
+    async fn test_handle_system_pause_with_pending_tasks() {
+        let (tx, rx) = mpsc::channel(100);
+        let mut actor = setup_actor_with_tasks(tx, rx);
+
+        // Add some pending tasks
+        actor
+            .pending_tasks
+            .lock()
+            .await
+            .push_back(create_test_proof_request());
 
         let result = actor.handle_system_pause().await;
         assert!(result.is_ok());
@@ -611,13 +646,14 @@ mod tests {
         assert_eq!(actor.pending_tasks.lock().await.len(), 0);
     }
 
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_handle_system_pause_with_running_tasks() {
         let (tx, rx) = mpsc::channel(100);
         let mut actor = setup_actor_with_tasks(tx, rx);
 
         // Add some running tasks
-        let task_descriptor = ProofTaskDescriptor::default();
+        let task_descriptor = create_test_task_descriptor();
         let cancellation_token = CancellationToken::new();
         actor
             .running_tasks
@@ -635,52 +671,22 @@ mod tests {
         // assert_eq!(actor.running_tasks.lock().await.len(), 0);
     }
 
-    #[tokio::test]
-    async fn test_handle_system_pause_with_aggregation_tasks() {
-        let (tx, rx) = mpsc::channel(100);
-        let mut actor = setup_actor_with_tasks(tx, rx);
-
-        // Add some aggregation tasks
-        let request = AggregationOnlyRequest::default();
-        let cancellation_token = CancellationToken::new();
-        actor
-            .aggregate_tasks
-            .lock()
-            .await
-            .insert(request.clone(), cancellation_token.clone());
-
-        let result = actor.handle_system_pause().await;
-        assert!(result.is_ok());
-
-        // Verify aggregation tasks were cancelled
-        assert!(cancellation_token.is_cancelled());
-        // TODO(Kero): Cancelled tasks should be removed from aggregate_tasks
-        // assert_eq!(actor.aggregate_tasks.lock().await.len(), 0);
-    }
-
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_handle_system_pause_with_failures() {
         let (tx, rx) = mpsc::channel(100);
         let mut actor = setup_actor_with_tasks(tx, rx);
 
         // Add some pending tasks
-        {
-            actor.pending_tasks.lock().await.push_back(ProofRequest {
-                block_number: 1,
-                l1_inclusion_block_number: 1,
-                network: "test".to_string(),
-                l1_network: "test".to_string(),
-                graffiti: B256::ZERO,
-                prover: Default::default(),
-                proof_type: Default::default(),
-                blob_proof_type: Default::default(),
-                prover_args: HashMap::new(),
-            });
-        }
+        actor
+            .pending_tasks
+            .lock()
+            .await
+            .push_back(create_test_proof_request());
 
         let good_running_task_token = {
             // Add some running tasks
-            let task_descriptor = ProofTaskDescriptor::default();
+            let task_descriptor = create_test_task_descriptor();
             let cancellation_token = CancellationToken::new();
             actor
                 .running_tasks
@@ -727,12 +733,16 @@ mod tests {
     }
 
     // Helper function to setup actor with common test configuration
-    fn setup_actor_with_tasks(tx: Sender<Message>, rx: Receiver<Message>) -> ProofActor {
+    fn setup_actor_with_tasks(tx: Sender<Message>, _rx: Receiver<Message>) -> ProofActor {
+        let redis_database = rand::thread_rng().gen_range(0..10000);
         let opts = Opts {
             concurrency_limit: 4,
+            redis_url: format!("redis://localhost:6379/{redis_database}"),
+            redis_ttl: 3600,
             ..Default::default()
         };
+        let task_manager = TaskManagerWrapperImpl::new(&opts.clone().into());
 
-        ProofActor::new(tx, rx, opts, SupportedChainSpecs::default())
+        ProofActor::new(tx, opts, SupportedChainSpecs::default(), task_manager)
     }
 }

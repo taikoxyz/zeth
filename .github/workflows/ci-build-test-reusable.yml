@@ -57,5 +57,7 @@ jobs:
       - name: Build ${{ inputs.version_name }} prover
         run: make build
 
+      - name: Setup Redis service
+        uses: shogo82148/actions-setup-redis@v1
       - name: Test ${{ inputs.version_name }} prover
         run: make test

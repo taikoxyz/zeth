@@ -1,4 +1,7 @@
-use std::io::{Error as IOError, ErrorKind as IOErrorKind};
+use std::{
+    io::{Error as IOError, ErrorKind as IOErrorKind},
+    str::FromStr,
+};
 
 use chrono::{DateTime, Utc};
 use raiko_core::interfaces::AggregationOnlyRequest;
@@ -8,7 +11,6 @@ use raiko_lib::{
     prover::{IdStore, IdWrite, ProofKey, ProverResult},
 };
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 use utoipa::ToSchema;
 
 #[cfg(feature = "in-memory")]
@@ -147,24 +149,31 @@ pub struct ProofTaskDescriptor {
     pub blockhash: B256,
     pub proof_system: ProofType,
     pub prover: String,
+    pub image_id: Option<String>,
 }
 
-impl From<(ChainId, u64, B256, ProofType, String)> for ProofTaskDescriptor {
-    fn from(
-        (chain_id, block_id, blockhash, proof_system, prover): (
-            ChainId,
-            u64,
-            B256,
-            ProofType,
-            String,
-        ),
+impl ProofTaskDescriptor {
+    /// Create a new ProofTaskDescriptor.
+    /// For RISC0 and SP1 provers, image_id should be provided.
+    pub fn new(
+        chain_id: ChainId,
+        block_id: u64,
+        blockhash: B256,
+        proof_system: ProofType,
+        prover: String,
+        image_id: Option<String>,
     ) -> Self {
-        ProofTaskDescriptor {
+        debug_assert!(
+            matches!(proof_system, ProofType::Native | ProofType::Sgx) || image_id.is_some(),
+            "RISC0/SP1 provers require image_id to be provided"
+        );
+        Self {
             chain_id,
             block_id,
             blockhash,
             proof_system,
             prover,
+            image_id,
         }
     }
 }
@@ -183,20 +192,38 @@ impl From<ProofTaskDescriptor> for (ChainId, B256) {
 
 #[derive(Default, Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
 #[serde(default)]
-/// A request for proof aggregation of multiple proofs.
 pub struct AggregationTaskDescriptor {
-    /// The block numbers and l1 inclusion block numbers for the blocks to aggregate proofs for.
     pub aggregation_ids: Vec<u64>,
-    /// The proof type.
     pub proof_type: Option<String>,
+    pub image_id: Option<String>,
 }
 
-impl From<&AggregationOnlyRequest> for AggregationTaskDescriptor {
-    fn from(request: &AggregationOnlyRequest) -> Self {
-        Self {
-            aggregation_ids: request.aggregation_ids.clone(),
-            proof_type: request.proof_type.clone().map(|p| p.to_string()),
+impl TryFrom<&AggregationOnlyRequest> for AggregationTaskDescriptor {
+    type Error = String;
+
+    fn try_from(request: &AggregationOnlyRequest) -> Result<Self, Self::Error> {
+        // Check if we need an image ID for this proof type
+        if let Some(pt) = request
+            .proof_type
+            .as_ref()
+            .and_then(|pt| ProofType::from_str(pt).ok())
+        {
+            match pt {
+                ProofType::Risc0 | ProofType::Sp1 if request.image_id.is_none() => {
+                    return Err("RISC0/SP1 provers require image_id to be provided".to_string());
+                }
+                ProofType::Native | ProofType::Sgx if request.image_id.is_some() => {
+                    return Err("Native/SGX provers must not have image_id".to_string());
+                }
+                _ => {}
+            }
         }
+
+        Ok(Self {
+            aggregation_ids: request.aggregation_ids.clone(),
+            proof_type: request.proof_type.clone(),
+            image_id: request.image_id.clone(),
+        })
     }
 }
 
@@ -224,7 +251,7 @@ pub struct TaskManagerOpts {
 }
 
 #[async_trait::async_trait]
-pub trait TaskManager: IdStore + IdWrite + Send + Sync {
+pub trait TaskManager: IdStore + IdWrite + Send + Sync + Clone {
     /// Create a new task manager.
     fn new(opts: &TaskManagerOpts) -> Self;
 
@@ -304,6 +331,7 @@ pub fn ensure(expression: bool, message: &str) -> TaskManagerResult<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
 pub struct TaskManagerWrapper<T: TaskManager> {
     manager: T,
 }
@@ -423,13 +451,8 @@ impl<T: TaskManager> TaskManager for TaskManagerWrapper<T> {
 
 #[cfg(feature = "in-memory")]
 pub type TaskManagerWrapperImpl = TaskManagerWrapper<InMemoryTaskManager>;
-#[cfg(feature = "redis-db")]
+#[cfg(all(feature = "redis-db", not(feature = "in-memory")))]
 pub type TaskManagerWrapperImpl = TaskManagerWrapper<RedisTaskManager>;
-
-pub fn get_task_manager(opts: &TaskManagerOpts) -> TaskManagerWrapperImpl {
-    debug!("get task manager with options: {:?}", opts);
-    TaskManagerWrapperImpl::new(opts)
-}
 
 #[cfg(test)]
 mod test {
@@ -443,18 +466,19 @@ mod test {
             redis_url: "redis://localhost:6379".to_string(),
             redis_ttl: 3600,
         };
-        let mut task_manager = get_task_manager(&opts);
+        let mut task_manager = TaskManagerWrapperImpl::new(&opts);
 
         let block_id = rand::thread_rng().gen_range(0..1000000);
         assert_eq!(
             task_manager
-                .enqueue_task(&ProofTaskDescriptor {
-                    chain_id: 1,
+                .enqueue_task(&ProofTaskDescriptor::new(
+                    ChainId::from(1u64),
                     block_id,
-                    blockhash: B256::default(),
-                    proof_system: ProofType::Native,
-                    prover: "test".to_string(),
-                })
+                    B256::default(),
+                    ProofType::Native,
+                    "test".to_string(),
+                    None,
+                ))
                 .await
                 .unwrap()
                 .0
@@ -470,15 +494,16 @@ mod test {
             redis_url: "redis://localhost:6379".to_string(),
             redis_ttl: 3600,
         };
-        let mut task_manager = get_task_manager(&opts);
+        let mut task_manager = TaskManagerWrapperImpl::new(&opts);
         let block_id = rand::thread_rng().gen_range(0..1000000);
-        let key = ProofTaskDescriptor {
-            chain_id: 1,
+        let key = ProofTaskDescriptor::new(
+            ChainId::from(1u64),
             block_id,
-            blockhash: B256::default(),
-            proof_system: ProofType::Native,
-            prover: "test".to_string(),
-        };
+            B256::default(),
+            ProofType::Native,
+            "test".to_string(),
+            None,
+        );
 
         assert_eq!(task_manager.enqueue_task(&key).await.unwrap().0.len(), 1);
         // enqueue again

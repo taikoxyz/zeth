@@ -4,7 +4,14 @@ use raiko_tasks::{ProofTaskDescriptor, TaskManager, TaskStatus};
 use serde_json::Value;
 use utoipa::OpenApi;
 
-use crate::{interfaces::HostResult, server::api::v2::CancelStatus, Message, ProverState};
+use crate::{
+    interfaces::HostResult,
+    server::api::{
+        util::{ensure_not_paused, ensure_proof_request_image_id},
+        v2::CancelStatus,
+    },
+    Message, ProverState,
+};
 
 #[utoipa::path(post, path = "/proof/cancel",
     tag = "Proving",
@@ -31,6 +38,9 @@ async fn cancel_handler(
     let mut config = prover_state.request_config();
     config.merge(&req)?;
 
+    ensure_not_paused(&prover_state)?;
+    ensure_proof_request_image_id(&mut config)?;
+
     // Construct the actual proof request from the available configs.
     let proof_request = ProofRequest::try_from(config)?;
 
@@ -41,13 +51,14 @@ async fn cancel_handler(
     )
     .await?;
 
-    let key = ProofTaskDescriptor::from((
+    let key = ProofTaskDescriptor::new(
         chain_id,
         proof_request.block_number,
         block_hash,
         proof_request.proof_type,
-        proof_request.prover.clone().to_string(),
-    ));
+        proof_request.prover.to_string(),
+        proof_request.image_id.clone(),
+    );
 
     prover_state
         .task_channel

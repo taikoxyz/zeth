@@ -1,8 +1,11 @@
 use crate::{
     interfaces::HostResult,
     metrics::{inc_current_req, inc_guest_req_count, inc_host_req_count},
-    server::api::util::ensure_not_paused,
-    server::api::{v2, v3::Status},
+    server::api::{
+        util::{ensure_aggregation_request_image_id, ensure_not_paused},
+        v2,
+        v3::Status,
+    },
     Message, ProverState,
 };
 use axum::{debug_handler, extract::State, routing::post, Json, Router};
@@ -42,6 +45,13 @@ async fn proof_handler(
 
     ensure_not_paused(&prover_state)?;
 
+    // TODO: remove this assert after we support custom image_id for RISC0/SP1 proof type
+    assert!(
+        aggregation_request.image_id.is_none(),
+        "currently we don't support custom image_id for RISC0/SP1 proof type"
+    );
+    ensure_aggregation_request_image_id(&mut aggregation_request)?;
+
     // Override the existing proof request config from the config file and command line
     // options with the request from the client.
     aggregation_request.merge(&prover_state.request_config())?;
@@ -68,13 +78,14 @@ async fn proof_handler(
         )
         .await?;
 
-        let key = ProofTaskDescriptor::from((
+        let key = ProofTaskDescriptor::new(
             chain_id,
             proof_request.block_number,
             blockhash,
             proof_request.proof_type,
             proof_request.prover.to_string(),
-        ));
+            proof_request.image_id.clone(),
+        );
 
         tasks.push((key, proof_request));
     }
@@ -87,6 +98,7 @@ async fn proof_handler(
 
     for (key, req) in tasks.iter() {
         let status = manager.get_task_proving_status(key).await?;
+        tracing::info!("/v3/proof, request: {:?}, status: {:?}", req, status);
 
         if let Some((latest_status, ..)) = status.0.last() {
             match latest_status {
@@ -150,6 +162,7 @@ async fn proof_handler(
             proofs,
             proof_type: aggregation_request.proof_type,
             prover_args: aggregation_request.prover_args,
+            image_id: aggregation_request.image_id,
         };
 
         let status = manager
@@ -243,7 +256,8 @@ mod tests {
     use std::path::PathBuf;
     use tower::ServiceExt;
 
-    #[tokio::test]
+    #[serial_test::serial]
+    #[test_log::test(tokio::test)]
     async fn test_proof_handler_when_paused() {
         let opts = {
             let mut opts = crate::Opts::parse();

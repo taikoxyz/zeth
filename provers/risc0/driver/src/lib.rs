@@ -2,10 +2,6 @@
 
 #[cfg(feature = "bonsai-auto-scaling")]
 use crate::bonsai::auto_scaling::shutdown_bonsai;
-use crate::{
-    methods::risc0_aggregation::RISC0_AGGREGATION_ELF,
-    methods::risc0_guest::{RISC0_GUEST_ELF, RISC0_GUEST_ID},
-};
 use alloy_primitives::{hex::ToHexExt, B256};
 use bonsai::{cancel_proof, maybe_prove};
 use log::{info, warn};
@@ -15,7 +11,10 @@ use raiko_lib::{
         ZkAggregationGuestInput,
     },
     proof_type::ProofType,
-    prover::{IdStore, IdWrite, Proof, ProofKey, Prover, ProverConfig, ProverError, ProverResult},
+    prover::{
+        encode_image_id, IdStore, IdWrite, Proof, ProofKey, Prover, ProverConfig, ProverError,
+        ProverResult,
+    },
 };
 use risc0_zkvm::{
     compute_image_id, default_prover, serde::to_vec, sha::Digestible, ExecutorEnv, ProverOpts,
@@ -24,7 +23,6 @@ use risc0_zkvm::{
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::fmt::Debug;
-use tracing::debug;
 
 pub mod bonsai;
 pub mod methods;
@@ -77,13 +75,20 @@ impl Prover for Risc0Prover {
             ProofType::Risc0 as u8,
         );
 
-        debug!("elf code length: {}", RISC0_GUEST_ELF.len());
+        let (elf, image_id) = Risc0Prover::current_proving_image();
+
+        info!(
+            "Using risc0 image id: {}, elf.length: {}",
+            encode_image_id(image_id),
+            elf.len()
+        );
+
         let encoded_input = to_vec(&input).expect("Could not serialize proving input!");
 
         let (uuid, receipt) = maybe_prove::<GuestInput, B256>(
             &config,
             encoded_input,
-            RISC0_GUEST_ELF,
+            elf,
             &output.hash,
             (Vec::<Receipt>::new(), Vec::new()),
             proof_key,
@@ -132,6 +137,20 @@ impl Prover for Risc0Prover {
             "Aggregation must be in bonsai snark mode"
         );
 
+        let (proving_elf, proving_image_id) = Risc0Prover::current_proving_image();
+        let (aggregation_elf, aggregation_image_id) = Risc0Prover::current_aggregation_image();
+
+        info!(
+            "Using risc0 proving image id: {}, elf.length: {}",
+            encode_image_id(proving_image_id),
+            proving_elf.len()
+        );
+        info!(
+            "Using risc0 aggregation image id: {}, elf.length: {}",
+            encode_image_id(aggregation_image_id),
+            aggregation_elf.len()
+        );
+
         // Extract the block proof receipts
         let assumptions: Vec<Receipt> = input
             .proofs
@@ -148,7 +167,8 @@ impl Prover for Risc0Prover {
             .map(|proof| proof.input.unwrap())
             .collect::<Vec<_>>();
         let input = ZkAggregationGuestInput {
-            image_id: RISC0_GUEST_ID,
+            // TODO(Kero): use input.image_id
+            image_id: *proving_image_id,
             block_inputs,
         };
         info!("Start aggregate proofs");
@@ -163,7 +183,7 @@ impl Prover for Risc0Prover {
 
         let opts = ProverOpts::groth16();
         let receipt = default_prover()
-            .prove_with_opts(env, RISC0_AGGREGATION_ELF, &opts)
+            .prove_with_opts(env, aggregation_elf, &opts)
             .unwrap()
             .receipt;
 
@@ -171,8 +191,8 @@ impl Prover for Risc0Prover {
             "Generate aggregation receipt journal: {:?}",
             alloy_primitives::hex::encode_prefixed(receipt.journal.bytes.clone())
         );
-        let block_proof_image_id = compute_image_id(RISC0_GUEST_ELF).unwrap();
-        let aggregation_image_id = compute_image_id(RISC0_AGGREGATION_ELF).unwrap();
+        let block_proof_image_id = compute_image_id(proving_elf).unwrap();
+        let aggregation_image_id = compute_image_id(aggregation_elf).unwrap();
         let proof_data = snarks::verify_aggregation_groth16_proof(
             block_proof_image_id,
             aggregation_image_id,
@@ -218,12 +238,21 @@ impl Prover for Risc0Prover {
             .map_err(|e| ProverError::GuestError(e.to_string()))?;
         id_store.remove_id(key).await
     }
+
+    fn current_proving_image() -> (&'static [u8], &'static [u32; 8]) {
+        use crate::methods::risc0_guest::{RISC0_GUEST_ELF, RISC0_GUEST_ID};
+        (RISC0_GUEST_ELF, &RISC0_GUEST_ID)
+    }
+
+    fn current_aggregation_image() -> (&'static [u8], &'static [u32; 8]) {
+        use crate::methods::risc0_aggregation::{RISC0_AGGREGATION_ELF, RISC0_AGGREGATION_ID};
+        (RISC0_AGGREGATION_ELF, &RISC0_AGGREGATION_ID)
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use methods::risc0_guest::RISC0_GUEST_ID;
     use methods::test_risc0_guest::{TEST_RISC0_GUEST_ELF, TEST_RISC0_GUEST_ID};
     use risc0_zkvm::{default_prover, ExecutorEnv};
 
@@ -239,9 +268,15 @@ mod test {
     #[ignore = "only to print image id for docker image build"]
     #[test]
     fn test_show_risc0_image_id() {
-        let image_id = RISC0_GUEST_ID
-            .map(|limp| hex::encode(limp.to_le_bytes()))
-            .concat();
-        println!("RISC0 IMAGE_ID: {}", image_id);
+        let (_, proving_image_id) = Risc0Prover::current_proving_image();
+        let (_, aggregation_image_id) = Risc0Prover::current_aggregation_image();
+        println!(
+            "RISC0 PROVING IMAGE_ID: {}",
+            encode_image_id(proving_image_id)
+        );
+        println!(
+            "RISC0 AGGREGATION IMAGE_ID: {}",
+            encode_image_id(aggregation_image_id)
+        );
     }
 }

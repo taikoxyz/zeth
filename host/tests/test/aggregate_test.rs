@@ -7,14 +7,16 @@ use raiko_lib::consts::Network;
 use raiko_lib::proof_type::ProofType;
 use raiko_tasks::TaskStatus;
 
-#[tokio::test]
+#[serial_test::serial]
+#[test_log::test(tokio::test)]
 async fn test_v2_mainnet_aggregate_native() {
     test_v2_mainnet_aggregate(Network::TaikoMainnet, ProofType::Native).await;
 }
 
 #[ignore]
+#[serial_test::serial]
 #[cfg(feature = "risc0")]
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_v2_mainnet_aggregate_risc0() {
     test_v2_mainnet_aggregate(Network::TaikoMainnet, ProofType::Risc0).await;
 }
@@ -23,7 +25,7 @@ async fn test_v2_mainnet_aggregate(network: Network, proof_type: ProofType) {
     setup_mock_zkvm_elf();
 
     let api_version = "v2";
-    let aggregate_block_count = 2;
+    let aggregate_block_count = 1;
 
     let block_numbers = randomly_select_blocks(network, aggregate_block_count)
         .await

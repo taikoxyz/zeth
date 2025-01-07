@@ -11,11 +11,13 @@ use tokio_util::sync::CancellationToken;
 /// ```
 /// let server = TestServerBuilder::default()
 ///     .port(8080)
+///     .redis_url("redis://127.0.0.1:6379/0".to_string())
 ///     .build();
 /// ```
 #[derive(Default, Debug)]
 pub struct TestServerBuilder {
     port: Option<u16>,
+    redis_url: Option<String>,
 }
 
 impl TestServerBuilder {
@@ -24,11 +26,19 @@ impl TestServerBuilder {
         self
     }
 
+    pub fn redis_url(mut self, redis_url: String) -> Self {
+        self.redis_url = Some(redis_url);
+        self
+    }
+
     pub fn build(self) -> TestServerHandle {
         let port = self
             .port
             .unwrap_or(rand::thread_rng().gen_range(1024..65535));
         let address = format!("127.0.0.1:{port}");
+        let redis_url = self
+            .redis_url
+            .unwrap_or("redis://localhost:6379/0".to_string());
 
         // TODO
         // opts.config_path
@@ -38,7 +48,9 @@ impl TestServerBuilder {
             address,
             log_level,
 
+            redis_url,
             concurrency_limit: 16,
+            redis_ttl: 3600,
             ..Default::default()
         };
         let state = ProverState::init_with_opts(opts).expect("Failed to initialize prover state");

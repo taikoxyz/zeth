@@ -1,8 +1,10 @@
-use raiko_core::interfaces::{AggregationOnlyRequest, ProofRequestOpt, ProverSpecificOpts};
+use raiko_core::interfaces::{
+    get_aggregation_image, AggregationOnlyRequest, ProofRequestOpt, ProverSpecificOpts,
+};
 use raiko_host::server::api;
-use raiko_lib::consts::Network;
 use raiko_lib::proof_type::ProofType;
 use raiko_lib::prover::Proof;
+use raiko_lib::{consts::Network, prover::encode_image_id};
 use raiko_tasks::{TaskDescriptor, TaskReport, TaskStatus};
 use serde_json::json;
 
@@ -20,6 +22,13 @@ pub fn make_proof_request(
         block_number,
         std::time::Instant::now().elapsed().as_secs()
     );
+    let image_id = match proof_type {
+        ProofType::Sp1 | ProofType::Risc0 => {
+            let (_, image_id) = get_aggregation_image(*proof_type).unwrap();
+            Some(encode_image_id(image_id))
+        }
+        ProofType::Native | ProofType::Sgx => None,
+    };
     ProofRequestOpt {
         block_number: Some(block_number),
         network: Some(network.to_string()),
@@ -46,6 +55,7 @@ pub fn make_proof_request(
             sgx: None,
             sp1: None,
         },
+        image_id,
     }
 }
 
@@ -66,6 +76,13 @@ pub async fn make_aggregate_proof_request(
             .join(","),
         std::time::Instant::now().elapsed().as_secs()
     );
+    let image_id = match proof_type {
+        ProofType::Sp1 | ProofType::Risc0 => {
+            let (_, image_id) = get_aggregation_image(*proof_type).unwrap();
+            Some(encode_image_id(image_id))
+        }
+        ProofType::Native | ProofType::Sgx => None,
+    };
     AggregationOnlyRequest {
         aggregation_ids: block_numbers,
         proofs,
@@ -83,6 +100,7 @@ pub async fn make_aggregate_proof_request(
             sgx: None,
             sp1: None,
         },
+        image_id,
     }
 }
 
@@ -246,7 +264,8 @@ pub async fn get_status_of_aggregation_proof_request(
     client: &Client,
     request: &AggregationOnlyRequest,
 ) -> TaskStatus {
-    let expected_task_descriptor: TaskDescriptor = TaskDescriptor::Aggregation(request.into());
+    let expected_task_descriptor: TaskDescriptor =
+        TaskDescriptor::Aggregation(request.try_into().unwrap());
     let report = v2_assert_report(client).await;
     for (task_descriptor, task_status) in &report {
         if task_descriptor == &expected_task_descriptor {

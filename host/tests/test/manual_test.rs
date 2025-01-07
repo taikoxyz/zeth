@@ -1,8 +1,10 @@
 use crate::common::{complete_proof_request, v2_assert_report, Client};
-use raiko_core::interfaces::{ProofRequestOpt, ProverSpecificOpts};
+use raiko_core::interfaces::{get_aggregation_image, ProofRequestOpt, ProverSpecificOpts};
 use raiko_host::server::api;
+use raiko_lib::{proof_type::ProofType, prover::encode_image_id};
 use raiko_tasks::TaskStatus;
 use serde_json::json;
+use std::str::FromStr;
 
 /// This test is used to manually test the proof process. Operator can use this to test case to
 /// simplly test online service.
@@ -19,7 +21,7 @@ use serde_json::json;
 /// RAIKO_TEST_MANUAL_PROVE_RAIKO_RPC_URL=https://rpc.raiko.xyz \
 /// cargo test --test test_manual_prove -- --ignored
 /// ```
-#[tokio::test]
+#[test_log::test(tokio::test)]
 #[ignore]
 pub async fn test_manual_prove() {
     let enabled = std::env::var("RAIKO_TEST_MANUAL_PROVE_ENABLED").unwrap_or_default() == "false";
@@ -32,16 +34,26 @@ pub async fn test_manual_prove() {
     let api_version = std::env::var("RAIKO_TEST_MANUAL_PROVE_API_VERSION").unwrap_or_default();
     let network = std::env::var("RAIKO_TEST_MANUAL_PROVE_NETWORK").unwrap_or_default();
     let proof_type = std::env::var("RAIKO_TEST_MANUAL_PROVE_PROOF_TYPE").unwrap_or_default();
+    let proof_type = ProofType::from_str(&proof_type).unwrap();
     let block_number = std::env::var("RAIKO_TEST_MANUAL_PROVE_BLOCK_NUMBER")
         .map(|s| s.parse::<u64>().unwrap())
         .unwrap();
     let raiko_rpc_url = std::env::var("RAIKO_TEST_MANUAL_PROVE_RAIKO_RPC_URL").unwrap_or_default();
 
+    let image_id = match proof_type {
+        ProofType::Sp1 | ProofType::Risc0 => {
+            let (_, image_id) = get_aggregation_image(proof_type).unwrap();
+            Some(encode_image_id(image_id))
+        }
+        ProofType::Native | ProofType::Sgx => None,
+    };
+
     let client = Client::new(raiko_rpc_url.clone());
     let request = ProofRequestOpt {
         block_number: Some(block_number),
         network: Some(network.clone()),
-        proof_type: Some(proof_type.clone()),
+        proof_type: Some(proof_type.to_string()),
+        image_id,
 
         // Untesting parameters
         l1_inclusion_block_number: None,
