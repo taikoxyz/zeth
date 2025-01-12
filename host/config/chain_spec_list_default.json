@@ -95,6 +95,7 @@
         },
         "l1_contract": "0x79c9109b764609df928d16fc4a91e9081f7e87db",
         "l2_contract": "0x1670090000000000000000000000000000010001",
+        "preflight_rpc": "http://lb-2bduom5g-1m4f8703wp6ck9ab.clb.sg-tencentclb.com",
         "rpc": "https://rpc.hekla.taiko.xyz",
         "beacon_rpc": null,
         "verifier_address_forks": {

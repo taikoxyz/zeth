@@ -14,21 +14,39 @@ use crate::{
     MerkleProof,
 };
 
+use super::RethPreflightBlockDataProvider;
+
 #[derive(Clone)]
 pub struct RpcBlockDataProvider {
     pub provider: ReqwestProvider,
     pub client: RpcClient<Http<Client>>,
     block_number: u64,
+    preflight_provider: Option<RethPreflightBlockDataProvider>,
 }
 
 impl RpcBlockDataProvider {
-    pub fn new(url: &str, block_number: u64) -> RaikoResult<Self> {
+    pub async fn new(
+        url: &str,
+        preflight_url: Option<String>,
+        block_number: u64,
+    ) -> RaikoResult<Self> {
         let url =
             reqwest::Url::parse(url).map_err(|_| RaikoError::RPC("Invalid RPC URL".to_owned()))?;
+        let preflight_provider = match preflight_url {
+            Some(preflight_url) => {
+                let mut preflight_provider =
+                    RethPreflightBlockDataProvider::new(&preflight_url, block_number)?;
+                preflight_provider.fetch_preflight_data().await.unwrap();
+                Some(preflight_provider)
+            }
+            None => None,
+        };
+
         Ok(Self {
             provider: ProviderBuilder::new().on_provider(RootProvider::new_http(url.clone())),
             client: ClientBuilder::default().http(url),
             block_number,
+            preflight_provider,
         })
     }
 
@@ -39,6 +57,10 @@ impl RpcBlockDataProvider {
 
 impl BlockDataProvider for RpcBlockDataProvider {
     async fn get_blocks(&self, blocks_to_fetch: &[(u64, bool)]) -> RaikoResult<Vec<Block>> {
+        if let Some(preflight_provider) = &self.preflight_provider {
+            return preflight_provider.get_blocks(blocks_to_fetch).await;
+        }
+
         let mut all_blocks = Vec::with_capacity(blocks_to_fetch.len());
 
         let max_batch_size = 32;
@@ -84,10 +106,40 @@ impl BlockDataProvider for RpcBlockDataProvider {
     }
 
     async fn get_accounts(&self, accounts: &[Address]) -> RaikoResult<Vec<AccountInfo>> {
-        let mut all_accounts = Vec::with_capacity(accounts.len());
+        let (account_info_opts, missed_accounts) =
+            if let Some(preflight_provider) = &self.preflight_provider {
+                match preflight_provider.try_get_accounts(accounts).await {
+                    Ok(account_infos) => {
+                        let mut missed_accounts = Vec::new();
+
+                        account_infos.iter().zip(accounts.iter()).for_each(
+                            |(account_info, address)| {
+                                if account_info.is_none() {
+                                    missed_accounts.push(*address);
+                                }
+                            },
+                        );
+                        (account_infos, missed_accounts)
+                    }
+                    Err(e) => {
+                        tracing::error!("Error getting accounts from preflight provider: {:?}", e);
+                        (Vec::new(), accounts.to_vec())
+                    }
+                }
+            } else {
+                (Vec::new(), accounts.to_vec())
+            };
+
+        println!(
+            "preflight missed_accounts: {:?} in full list {:?}",
+            missed_accounts, accounts
+        );
+
+        // fall back to legacy RPC & process missed accounts
+        let mut all_missed_accounts = Vec::with_capacity(missed_accounts.len());
 
         let max_batch_size = 250;
-        for accounts in accounts.chunks(max_batch_size) {
+        for accounts in missed_accounts.chunks(max_batch_size) {
             let mut batch = self.client.new_batch();
 
             let mut nonce_requests = Vec::with_capacity(max_batch_size);
@@ -164,17 +216,65 @@ impl BlockDataProvider for RpcBlockDataProvider {
                 accounts.push(account_info);
             }
 
-            all_accounts.append(&mut accounts);
+            all_missed_accounts.append(&mut accounts);
         }
 
-        Ok(all_accounts)
+        if account_info_opts.is_empty() {
+            Ok(all_missed_accounts)
+        } else {
+            // insert the missed accounts back with the correct order
+            let mut all_accounts = Vec::with_capacity(accounts.len());
+            account_info_opts
+                .iter()
+                .for_each(|account_info_opt| match account_info_opt {
+                    Some(account_info) => all_accounts.push(account_info.clone()),
+                    None => {
+                        let account_info = all_missed_accounts.pop().unwrap();
+                        all_accounts.push(account_info);
+                    }
+                });
+            assert!(all_missed_accounts.is_empty());
+            Ok(all_accounts)
+        }
     }
 
     async fn get_storage_values(&self, accounts: &[(Address, U256)]) -> RaikoResult<Vec<U256>> {
-        let mut all_values = Vec::with_capacity(accounts.len());
+        let (preflight_storage_values, missed_accounts) =
+            if let Some(preflight_provider) = &self.preflight_provider {
+                match preflight_provider.try_get_storage_values(accounts).await {
+                    Ok(storage_values) => {
+                        let mut missed_accounts = Vec::new();
+                        storage_values.iter().zip(accounts.iter()).for_each(
+                            |(storage_value_opt, account)| {
+                                if storage_value_opt.is_none() {
+                                    missed_accounts.push(account.clone());
+                                }
+                            },
+                        );
+
+                        (storage_values, missed_accounts)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Error getting storage values from preflight provider: {:?}",
+                            e
+                        );
+                        (Vec::new(), accounts.to_vec())
+                    }
+                }
+            } else {
+                (Vec::new(), accounts.to_vec())
+            };
+
+        if !preflight_storage_values.is_empty() {
+            assert_eq!(preflight_storage_values.len(), accounts.len());
+        }
+
+        // fall back to legacy RPC & process missed accounts
+        let mut all_missed_values = Vec::with_capacity(missed_accounts.len());
 
         let max_batch_size = 1000;
-        for accounts in accounts.chunks(max_batch_size) {
+        for accounts in missed_accounts.chunks(max_batch_size) {
             let mut batch = self.client.new_batch();
 
             let mut requests = Vec::with_capacity(max_batch_size);
@@ -209,10 +309,27 @@ impl BlockDataProvider for RpcBlockDataProvider {
                 );
             }
 
-            all_values.append(&mut values);
+            all_missed_values.append(&mut values);
         }
 
-        Ok(all_values)
+        if preflight_storage_values.is_empty() {
+            return Ok(all_missed_values);
+        }
+
+        // insert back the missed values with the correct order
+        let mut storage_values = Vec::with_capacity(accounts.len());
+        preflight_storage_values
+            .iter()
+            .for_each(|storage_value_opt| match storage_value_opt {
+                Some(storage_value) => storage_values.push(storage_value.clone()),
+                None => {
+                    let storage_value = all_missed_values.pop().unwrap();
+                    storage_values.push(storage_value);
+                }
+            });
+        assert!(all_missed_values.is_empty());
+
+        Ok(storage_values)
     }
 
     async fn get_merkle_proofs(
@@ -222,10 +339,30 @@ impl BlockDataProvider for RpcBlockDataProvider {
         offset: usize,
         num_storage_proofs: usize,
     ) -> RaikoResult<MerkleProof> {
+        let (account_key_proofs, missed_accounts) = if let Some(preflight_provider) =
+            &self.preflight_provider
+        {
+            match preflight_provider
+                .try_get_merkle_proofs(block_number, accounts.clone(), offset, num_storage_proofs)
+                .await
+            {
+                Ok((account_key_proofs, missed_accounts)) => (account_key_proofs, missed_accounts),
+                Err(e) => {
+                    tracing::error!(
+                        "Error getting merkle proofs from preflight provider: {:?}",
+                        e
+                    );
+                    (MerkleProof::new(), accounts)
+                }
+            }
+        } else {
+            (MerkleProof::new(), accounts)
+        };
+
         let mut storage_proofs: MerkleProof = HashMap::new();
         let mut idx = offset;
 
-        let mut accounts = accounts.clone();
+        let mut accounts = missed_accounts.clone();
 
         let batch_limit = 1000;
         while !accounts.is_empty() {
@@ -315,6 +452,37 @@ impl BlockDataProvider for RpcBlockDataProvider {
         }
         clear_line();
 
-        Ok(storage_proofs)
+        if account_key_proofs.is_empty() {
+            return Ok(storage_proofs);
+        }
+
+        // Insert the account key proofs back with the correct order
+        let mut all_account_key_proofs = MerkleProof::new();
+        all_account_key_proofs.extend(account_key_proofs.into_iter());
+        while !storage_proofs.is_empty() {
+            let address = storage_proofs.keys().next().unwrap().clone();
+            let mut missed_proofs = storage_proofs.remove(&address).unwrap();
+            let account_key_proof = all_account_key_proofs.get_mut(&address).unwrap();
+            account_key_proof.storage_proof = account_key_proof
+                .storage_proof
+                .iter()
+                .map(|storage_proof| {
+                    if storage_proof.proof.is_empty() {
+                        let storage_proof = missed_proofs.storage_proof.pop().unwrap();
+                        storage_proof
+                    } else {
+                        storage_proof.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            assert!(
+                missed_proofs.storage_proof.is_empty(),
+                "missing proofs still exist for address {:?}",
+                address
+            );
+        }
+
+        Ok(all_account_key_proofs)
     }
 }

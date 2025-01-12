@@ -137,6 +137,7 @@ pub struct ChainSpec {
     pub l1_contract: Option<Address>,
     pub l2_contract: Option<Address>,
     pub rpc: String,
+    pub preflight_rpc: Option<String>,
     pub beacon_rpc: Option<String>,
     pub verifier_address_forks: BTreeMap<SpecId, BTreeMap<ProofType, Option<Address>>>,
     pub genesis_time: u64,
@@ -162,6 +163,7 @@ impl ChainSpec {
             l1_contract: None,
             l2_contract: None,
             rpc: "".to_string(),
+            preflight_rpc: None,
             beacon_rpc: None,
             verifier_address_forks: BTreeMap::new(),
             genesis_time: 0u64,
@@ -380,6 +382,7 @@ mod tests {
             l1_contract: None,
             l2_contract: None,
             rpc: "".to_string(),
+            preflight_rpc: None,
             beacon_rpc: None,
             verifier_address_forks: BTreeMap::from([(
                 SpecId::FRONTIER,

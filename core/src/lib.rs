@@ -332,18 +332,20 @@ mod tests {
             .parse()
             .unwrap();
         let provider = if v2_preflight {
-            let provider: RethPreflightBlockDataProvider = RethPreflightBlockDataProvider::new(
+            let mut provider: RethPreflightBlockDataProvider = RethPreflightBlockDataProvider::new(
                 &taiko_chain_spec.rpc.clone(),
                 proof_request.block_number - 1,
             )
-            .await
             .expect("new RethPreflightBlockDataProvider should be ok");
+            provider.fetch_preflight_data().await.unwrap();
             BlockDataProviderType::PreflightRpc(provider)
         } else {
             let provider = RpcBlockDataProvider::new(
                 &taiko_chain_spec.rpc.clone(),
+                taiko_chain_spec.preflight_rpc.clone(),
                 proof_request.block_number - 1,
             )
+            .await
             .expect("new RpcBlockDataProvider should be ok");
             BlockDataProviderType::CommonRpc(provider)
         };
@@ -366,36 +368,6 @@ mod tests {
             .expect("proof generation failed")
     }
 
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_prove_block_taiko_dev() {
-        let proof_type = get_proof_type_from_env();
-        let l1_network = "taiko_dev_l1".to_owned();
-        let network = "taiko_dev".to_owned();
-        // Give the CI an simpler block to test because it doesn't have enough memory.
-        // Unfortunately that also means that kzg is not getting fully verified by CI.
-        let block_number = 20;
-        let chain_specs = SupportedChainSpecs::merge_from_file(
-            "../host/config/chain_spec_list_devnet.json".into(),
-        )
-        .unwrap();
-        let taiko_chain_spec = chain_specs.get_chain_spec(&network).unwrap();
-        let l1_chain_spec = chain_specs.get_chain_spec(&l1_network).unwrap();
-
-        let proof_request = ProofRequest {
-            block_number,
-            l1_inclusion_block_number: 80,
-            network,
-            graffiti: B256::ZERO,
-            prover: Address::ZERO,
-            l1_network,
-            proof_type,
-            blob_proof_type: BlobProofType::ProofOfEquivalence,
-            prover_args: test_proof_params(false),
-        };
-        prove_block(l1_chain_spec, taiko_chain_spec, proof_request).await;
-    }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn test_prove_block_taiko_a7() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -405,7 +377,7 @@ mod tests {
         let network = Network::TaikoA7.to_string();
         // Give the CI an simpler block to test because it doesn't have enough memory.
         // Unfortunately that also means that kzg is not getting fully verified by CI.
-        let block_number = if is_ci() { 105987 } else { 101368 };
+        let block_number = if is_ci() { 105987 } else { 0x110e68 };
         let taiko_chain_spec = SupportedChainSpecs::default()
             .get_chain_spec(&network)
             .unwrap();
@@ -428,7 +400,9 @@ mod tests {
     }
 
     async fn get_recent_block_num(chain_spec: &ChainSpec) -> u64 {
-        let provider = RpcBlockDataProvider::new(&chain_spec.rpc, 0).unwrap();
+        let provider = RpcBlockDataProvider::new(&chain_spec.rpc, None, 0)
+            .await
+            .unwrap();
         let height = provider.provider.get_block_number().await.unwrap();
         height - 100
     }

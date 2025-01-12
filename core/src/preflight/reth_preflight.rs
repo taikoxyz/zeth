@@ -9,10 +9,7 @@ use alloy_rpc_types::eth::{
     Block as AlloyEthBlock, EIP1186AccountProofResponse, Header as AlloyEthHeader,
 };
 use raiko_lib::{
-    builder::RethBlockBuilder,
-    input::{GuestInput},
-    primitives::mpt::proofs_to_tries,
-    Measurement,
+    builder::RethBlockBuilder, input::GuestInput, primitives::mpt::proofs_to_tries, Measurement,
 };
 use serde::{Deserialize, Serialize};
 use tracing::error;
@@ -23,6 +20,7 @@ use crate::preflight::util::{
 
 /// `PreFlightRpcData` is the pre-flight data for the proving process.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreFlightRpcData {
     /// The block to be proven.
     // pub block: alloy_rpc_types_eth::Block,

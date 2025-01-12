@@ -99,7 +99,8 @@ pub async fn get_task_data(
     let taiko_chain_spec = chain_specs
         .get_chain_spec(network)
         .ok_or_else(|| RaikoError::InvalidRequestConfig("Unsupported raiko network".to_string()))?;
-    let provider = RpcBlockDataProvider::new(&taiko_chain_spec.rpc.clone(), block_number - 1)?;
+    let provider =
+        RpcBlockDataProvider::new(&taiko_chain_spec.rpc.clone(), None, block_number - 1).await?;
     let blocks = provider.get_blocks(&[(block_number, false)]).await?;
     let block = blocks
         .first()

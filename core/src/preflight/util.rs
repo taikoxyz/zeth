@@ -126,7 +126,7 @@ pub async fn prepare_taiko_chain_input(
 
     // // Get the L1 block in which the L2 block was included so we can fetch the DA data.
     // // Also get the L1 state block header so that we can prove the L1 state root.
-    let provider_l1 = RpcBlockDataProvider::new(&l1_chain_spec.rpc, block_number)?;
+    let provider_l1 = RpcBlockDataProvider::new(&l1_chain_spec.rpc, None, block_number).await?;
 
     info!("current taiko chain fork: {fork:?}");
 
