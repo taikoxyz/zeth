@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.5.0](https://github.com/taikoxyz/raiko/compare/v1.4.0...v1.5.0) (2024-12-27)
+
+
+### Features
+
+* complete v3 Aggregation APIs ([#424](https://github.com/taikoxyz/raiko/issues/424)) ([5dade7a](https://github.com/taikoxyz/raiko/commit/5dade7aaf2db1b76e1a4c59ce4a22f0a63bb7118))
+* **host:** impl API "/admin/pause" ([#440](https://github.com/taikoxyz/raiko/issues/440)) ([ddba6b0](https://github.com/taikoxyz/raiko/commit/ddba6b0add73f05778617e3950ffafc371b9293d))
+* **make:** add make help message ([#435](https://github.com/taikoxyz/raiko/issues/435)) ([bbe246b](https://github.com/taikoxyz/raiko/commit/bbe246b1932d42452afed590fe25c1066b6f0539))
+* **raiko:** all-in-one dependency install script ([#427](https://github.com/taikoxyz/raiko/issues/427)) ([7139be0](https://github.com/taikoxyz/raiko/commit/7139be0fbd0afcbdac4a56e267ee0230732de4c2))
+* **raiko:** make redis able to re-connect ([#432](https://github.com/taikoxyz/raiko/issues/432)) ([e530f4f](https://github.com/taikoxyz/raiko/commit/e530f4f55ec8d1e4511ac1178e4c50bdba0f2342))
+* **raiko:** retry task if previous running failed. ([#408](https://github.com/taikoxyz/raiko/issues/408)) ([3432737](https://github.com/taikoxyz/raiko/commit/3432737265602098d1db546b95541542360d64e2))
+* **repo:** don't run CI on draft PRs ([#428](https://github.com/taikoxyz/raiko/issues/428)) ([be2746b](https://github.com/taikoxyz/raiko/commit/be2746be5dbafd81ef49b15d3bbe102b9bd1d842))
+* **repo:** run native tests on pr in taskdb dir ([#433](https://github.com/taikoxyz/raiko/issues/433)) ([9ed4ac2](https://github.com/taikoxyz/raiko/commit/9ed4ac2958eaf742d8c191ef73b9f9ed510e202b))
+* **taskdb:** remove sqlite task manager ([#423](https://github.com/taikoxyz/raiko/issues/423)) ([89f748f](https://github.com/taikoxyz/raiko/commit/89f748f67eb78383ec978e156e5511a721af4e71))
+* union proof type relevant stuff ([#422](https://github.com/taikoxyz/raiko/issues/422)) ([4b0df41](https://github.com/taikoxyz/raiko/commit/4b0df4105f2b599d88455fc020d25eaa5a0d7c3d))
+
+
+### Bug Fixes
+
+* bump sp1 version + new patch ([#412](https://github.com/taikoxyz/raiko/issues/412)) ([64fd81f](https://github.com/taikoxyz/raiko/commit/64fd81f09a7305412286942ab0abb7cb8086c394))
+* **host:** limit body size using DefaultBodyLimit ([#437](https://github.com/taikoxyz/raiko/issues/437)) ([a720df5](https://github.com/taikoxyz/raiko/commit/a720df594a48abf63b96828462a512aec85cca9e))
+* **raiko:** avoid duplicate image uploads ([#439](https://github.com/taikoxyz/raiko/issues/439)) ([5804f23](https://github.com/taikoxyz/raiko/commit/5804f23298b832d956070c8f4f656f8c039e788e))
+* **raiko:** fix some misleading info prints ([#425](https://github.com/taikoxyz/raiko/issues/425)) ([32bc6a9](https://github.com/taikoxyz/raiko/commit/32bc6a994e4ce26f3bac1aebf7c7e60facd8e909))
+* **repo:** missed one workflow ([#429](https://github.com/taikoxyz/raiko/issues/429)) ([0c22438](https://github.com/taikoxyz/raiko/commit/0c22438527c819eec046b5e61c84ccc3c4551e4e))
+
+
+### Performance Improvements
+
+* **host:** release running_tasks lock asap ([#417](https://github.com/taikoxyz/raiko/issues/417)) ([6e98484](https://github.com/taikoxyz/raiko/commit/6e984840a8038a6654ab1ecbb1caea7c036feb3a))
+
 ## [1.4.0](https://github.com/taikoxyz/raiko/compare/v1.3.0...v1.4.0) (2024-11-11)
 
 
