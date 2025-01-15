@@ -1,0 +1,27 @@
+[package]
+name = "raiko-reqpool"
+version = "0.1.0"
+authors = ["Taiko Labs"]
+edition = "2021"
+
+[dependencies]
+raiko-lib = { workspace = true }
+raiko-core = { workspace = true }
+raiko-redis-derive = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+redis = { workspace = true }
+backoff = { workspace = true }
+derive-getters = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+alloy-primitives = { workspace = true }
+
+[dev-dependencies]
+lazy_static = { workspace = true }
