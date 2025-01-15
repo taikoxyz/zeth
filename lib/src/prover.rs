@@ -26,7 +26,9 @@ pub type ProverResult<T, E = ProverError> = core::result::Result<T, E>;
 pub type ProverConfig = serde_json::Value;
 pub type ProofKey = (ChainId, u64, B256, u8);
 
-#[derive(Clone, Debug, Serialize, ToSchema, Deserialize, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Debug, Serialize, ToSchema, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 /// The response body of a proof request.
 pub struct Proof {
     /// The proof either TEE or ZK.
@@ -50,7 +52,7 @@ pub trait IdWrite: Send {
 
 #[async_trait::async_trait]
 pub trait IdStore: IdWrite {
-    async fn read_id(&self, key: ProofKey) -> ProverResult<String>;
+    async fn read_id(&mut self, key: ProofKey) -> ProverResult<String>;
 }
 
 #[allow(async_fn_in_trait)]

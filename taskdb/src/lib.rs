@@ -321,7 +321,7 @@ impl<T: TaskManager> IdWrite for TaskManagerWrapper<T> {
 
 #[async_trait::async_trait]
 impl<T: TaskManager> IdStore for TaskManagerWrapper<T> {
-    async fn read_id(&self, key: ProofKey) -> ProverResult<String> {
+    async fn read_id(&mut self, key: ProofKey) -> ProverResult<String> {
         self.manager.read_id(key).await
     }
 }

@@ -1,0 +1,82 @@
+[package]
+name = "raiko-reqactor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# provers
+sp1-driver = { path = "../provers/sp1/driver", optional = true }
+risc0-driver = { path = "../provers/risc0/driver", optional = true }
+sgx-prover = { path = "../provers/sgx/prover", optional = true }
+
+# raiko
+raiko-lib = { workspace = true }
+raiko-core = { workspace = true }
+raiko-reqpool = { workspace = true }
+
+# alloy
+alloy-rlp = { workspace = true }
+alloy-rlp-derive = { workspace = true }
+alloy-sol-types = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-rpc-types = { workspace = true }
+alloy-provider = { workspace = true }
+alloy-transport-http = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-network = { workspace = true }
+alloy-rpc-client = { workspace = true }
+
+# crypto
+kzg = { workspace = true }
+kzg_traits = { workspace = true }
+
+# misc
+anyhow = { workspace = true }
+bincode = { workspace = true }
+bytemuck = { workspace = true }
+clap = { workspace = true }
+flate2 = { workspace = true }
+serde = { workspace = true }
+serde_with = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+env_logger = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+lru_time_cache = { workspace = true }
+prometheus = { workspace = true }
+lazy_static = { workspace = true }
+once_cell = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+reqwest_alloy = { workspace = true }
+sha2 = { workspace = true }
+proptest = { workspace = true }
+rlp = { workspace = true }
+url = { workspace = true }
+cfg-if = { workspace = true }
+cap = { workspace = true }
+dotenv = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+
+# reth
+reth-primitives = { workspace = true }
+reth-evm = { workspace = true }
+reth-evm-ethereum = { workspace = true }
+reth-provider = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+rstest = { workspace = true }
+ethers-core = { workspace = true }
+rand = { workspace = true }
+
+[features]
+default = []
+sp1 = ["raiko-core/sp1"]
+risc0 = ["raiko-core/risc0"]
+sgx = ["raiko-core/sgx"]
+integration = []
