@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use raiko_lib::{
     input::{GuestInput, GuestOutput},
@@ -8,7 +8,23 @@ use raiko_lib::{
 };
 use serde::{de::Error, Deserialize, Serialize};
 use serde_with::serde_as;
+use thiserror::Error;
+use tokio::fs;
 use tracing::trace;
+
+#[derive(Error, Debug)]
+pub enum NativeProverError {
+    #[error("Native param not provided")]
+    ParamNotProvided,
+    #[error("Failed to serialize input to JSON")]
+    SerializeError(#[from] serde_json::Error),
+    #[error("Failed to write JSON to file")]
+    FileWriteError(#[from] std::io::Error),
+    #[error("Protocol Instance hash not matched")]
+    HashMismatch,
+    #[error("Guest Error: {0}")]
+    GuestError(String),
+}
 
 pub struct NativeProver;
 
@@ -23,6 +39,17 @@ pub struct NativeResponse {
     pub output: GuestOutput,
 }
 
+impl NativeProver {
+    async fn save_input_to_file(path: &Path, input: &GuestInput) -> Result<(), NativeProverError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let json = serde_json::to_string(input)?;
+        fs::write(path, json).await?;
+        Ok(())
+    }
+}
+
 impl Prover for NativeProver {
     async fn run(
         input: GuestInput,
@@ -30,31 +57,22 @@ impl Prover for NativeProver {
         config: &ProverConfig,
         _store: Option<&mut dyn IdWrite>,
     ) -> ProverResult<Proof> {
-        let param =
-            config
-                .get("native")
-                .map(NativeParam::deserialize)
-                .ok_or(ProverError::Param(serde_json::Error::custom(
-                    "native param not provided",
-                )))??;
+        let param = config
+            .get("native")
+            .ok_or(NativeProverError::ParamNotProvided)
+            .and_then(|p| NativeParam::deserialize(p).map_err(NativeProverError::SerializeError))?;
 
-        if let Some(path) = param.json_guest_input {
-            let path = Path::new(&path);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let json = serde_json::to_string(&input)?;
-            std::fs::write(path, json)?;
+        if let Some(path_str) = param.json_guest_input {
+            let path = PathBuf::from(path_str);
+            Self::save_input_to_file(&path, &input).await?;
         }
 
-        trace!("Running the native prover for input {input:?}");
+        trace!("Running the native prover for input {:?}", input);
 
         let pi = ProtocolInstance::new(&input, &output.header, ProofType::Native)
             .map_err(|e| ProverError::GuestError(e.to_string()))?;
         if pi.instance_hash() != output.hash {
-            return Err(ProverError::GuestError(
-                "Protocol Instance hash not matched".to_string(),
-            ));
+            return Err(ProverError::GuestError(NativeProverError::HashMismatch.to_string()));
         }
 
         Ok(Proof {
