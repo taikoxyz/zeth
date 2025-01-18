@@ -31,6 +31,9 @@ impl Pipeline for Risc0Pipeline {
 
     fn builder(&self) -> CommandBuilder {
         let mut builder = CommandBuilder::new(&self.meta, "riscv32im-risc0-zkvm-elf", "risc0")
+            // Note: this env is usually enabled by the `unstable` feature flag of risc0-build.
+            //       and can be removed in the future.
+            .custom_env([("RISC0_FEATURE_bigint2".to_string(), "1".to_string())].into())
             .rust_flags(&[
                 "passes=loweratomic",
                 "link-arg=-Ttext=0x00200800",
