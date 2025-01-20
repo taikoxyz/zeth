@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, TxHash, B256};
 use alloy_sol_types::SolValue;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Error, Result};
 use reth_primitives::Header;
 
 #[cfg(not(feature = "std"))]
@@ -9,8 +9,8 @@ use crate::{
     consts::SupportedChainSpecs,
     input::{
         ontake::{BlockMetadataV2, BlockProposedV2},
-        BlobProofType, BlockMetadata, BlockProposed, BlockProposedFork, EthDeposit, GuestInput,
-        Transition,
+        BlobProofType, BlockMetadata, BlockProposed, BlockProposedFork, EthDeposit,
+        GuestBatchInput, GuestInput, Transition,
     },
     primitives::{
         eip4844::{self, commitment_to_version_hash},
@@ -257,6 +257,138 @@ impl ProtocolInstance {
         }
 
         Ok(pi)
+    }
+
+    pub fn new_batch(
+        batch_input: &GuestBatchInput,
+        header: &Header,
+        proof_type: ProofType,
+    ) -> Result<Self> {
+        let tx_list_hashs = batch_input.inputs.iter().try_fold(
+            Vec::<B256>::new(),
+            |mut tx_list_hashs, guest_input| {
+                if guest_input.taiko.block_proposed.blob_used() {
+                    let tx_list_hash =
+                        Self::get_verifiable_blob_tx_list_hash(guest_input, proof_type)?;
+                    tx_list_hashs.push(tx_list_hash);
+                } else {
+                    tx_list_hashs.push(TxHash::from(keccak(guest_input.taiko.tx_data.as_slice())));
+                }
+                Ok::<Vec<B256>, Error>(tx_list_hashs)
+            },
+        )?;
+
+        let input = &batch_input.inputs[0];
+
+        // If the passed in chain spec contains a known chain id, the chain spec NEEDS to match the
+        // one we expect, because the prover could otherwise just fill in any values.
+        // The chain id is used because that is the value that is put onchain,
+        // and so all other chain data needs to be derived from it.
+        // For unknown chain ids we just skip this check so that tests using test data can still pass.
+        // TODO: we should probably split things up in critical and non-critical parts
+        // in the chain spec itself so we don't have to manually all the ones we have to care about.
+        if let Some(verified_chain_spec) =
+            SupportedChainSpecs::default().get_chain_spec_with_chain_id(input.chain_spec.chain_id)
+        {
+            ensure!(
+                input.chain_spec.max_spec_id == verified_chain_spec.max_spec_id,
+                "unexpected max_spec_id"
+            );
+            ensure!(
+                input.chain_spec.hard_forks == verified_chain_spec.hard_forks,
+                "unexpected hard_forks"
+            );
+            ensure!(
+                input.chain_spec.eip_1559_constants == verified_chain_spec.eip_1559_constants,
+                "unexpected eip_1559_constants"
+            );
+            ensure!(
+                input.chain_spec.l1_contract == verified_chain_spec.l1_contract,
+                "unexpected l1_contract"
+            );
+            ensure!(
+                input.chain_spec.l2_contract == verified_chain_spec.l2_contract,
+                "unexpected l2_contract"
+            );
+            ensure!(
+                input.chain_spec.is_taiko == verified_chain_spec.is_taiko,
+                "unexpected eip_1559_constants"
+            );
+        }
+
+        let verifier_address = input
+            .chain_spec
+            .get_fork_verifier_address(input.taiko.block_proposed.block_number(), proof_type)
+            .unwrap_or_default();
+
+        let tx_list_hash = tx_list_hashs[0];
+        let pi = ProtocolInstance {
+            transition: Transition {
+                parentHash: header.parent_hash,
+                blockHash: header.hash_slow(),
+                stateRoot: header.state_root,
+                graffiti: input.taiko.prover_data.graffiti,
+            },
+            block_metadata: BlockMetaDataFork::from(input, header, tx_list_hash),
+            sgx_instance: Address::default(),
+            prover: input.taiko.prover_data.prover,
+            chain_id: input.chain_spec.chain_id,
+            verifier_address,
+        };
+
+        // Sanity check
+        if input.chain_spec.is_taiko() {
+            ensure!(
+                pi.block_metadata
+                    .match_block_proposal(&input.taiko.block_proposed),
+                format!(
+                    "block hash mismatch, expected: {:?}, got: {:?}",
+                    input.taiko.block_proposed, pi.block_metadata
+                )
+            );
+        }
+
+        Ok(pi)
+    }
+
+    // if blob is used, tx_list_hash is the commitment to the blob.
+    // either we verify the blob openning (if in zk) here by using proof_of_equivalence,
+    // or we just calculate the blob commitment and eventually it will be verified on-chain.
+    fn get_verifiable_blob_tx_list_hash(input: &GuestInput, proof_type: ProofType) -> Result<B256> {
+        let commitment = input
+            .taiko
+            .blob_commitment
+            .as_ref()
+            .expect("no blob commitment");
+        let versioned_hash = commitment_to_version_hash(&commitment.clone().try_into().unwrap());
+
+        let blob_proof_type = get_blob_proof_type(proof_type, input.taiko.blob_proof_type.clone());
+        info!("blob proof type: {:?}", &blob_proof_type);
+        match blob_proof_type {
+            crate::input::BlobProofType::ProofOfEquivalence => {
+                let ct = CycleTracker::start("proof_of_equivalence");
+                let (x, y) = eip4844::proof_of_equivalence(&input.taiko.tx_data, &versioned_hash)?;
+                ct.end();
+                let verified = eip4844::verify_kzg_proof_impl(
+                    commitment.clone().try_into().unwrap(),
+                    x,
+                    y,
+                    input
+                        .taiko
+                        .blob_proof
+                        .clone()
+                        .map(|p| TryInto::<[u8; 48]>::try_into(p).unwrap())
+                        .unwrap(),
+                )?;
+                ensure!(verified);
+            }
+            BlobProofType::KzgVersionedHash => {
+                let ct = CycleTracker::start("proof_of_commitment");
+                ensure!(commitment == &eip4844::calc_kzg_proof_commitment(&input.taiko.tx_data)?);
+                ct.end();
+            }
+        };
+        Ok(versioned_hash)
     }
 
     pub fn sgx_instance(mut self, instance: Address) -> Self {

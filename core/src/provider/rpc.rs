@@ -3,6 +3,7 @@ use alloy_provider::{ProviderBuilder, ReqwestProvider, RootProvider};
 use alloy_rpc_client::{ClientBuilder, RpcClient};
 use alloy_rpc_types::{Block, BlockId, BlockNumberOrTag, EIP1186AccountProofResponse};
 use alloy_transport_http::Http;
+use ethers_core::k256::sha2::digest::block_buffer;
 use raiko_lib::clear_line;
 use reqwest_alloy::Client;
 use reth_primitives::revm_primitives::{AccountInfo, Bytecode};
@@ -18,7 +19,8 @@ use crate::{
 pub struct RpcBlockDataProvider {
     pub provider: ReqwestProvider,
     pub client: RpcClient<Http<Client>>,
-    block_number: u64,
+    block_numbers: Vec<u64>,
+    current_block_number: u64,
 }
 
 impl RpcBlockDataProvider {
@@ -28,7 +30,21 @@ impl RpcBlockDataProvider {
         Ok(Self {
             provider: ProviderBuilder::new().on_provider(RootProvider::new_http(url.clone())),
             client: ClientBuilder::default().http(url),
-            block_number,
+            block_numbers: vec![block_number],
+            current_block_number: block_number,
+        })
+    }
+
+    pub fn new_batch(url: &str, block_numbers: Vec<u64>) -> RaikoResult<Self> {
+        assert!(!block_numbers.is_empty());
+        let url =
+            reqwest::Url::parse(url).map_err(|_| RaikoError::RPC("Invalid RPC URL".to_owned()))?;
+        let current_block_number = block_numbers[0];
+        Ok(Self {
+            provider: ProviderBuilder::new().on_provider(RootProvider::new_http(url.clone())),
+            client: ClientBuilder::default().http(url),
+            block_numbers,
+            current_block_number,
         })
     }
 
@@ -83,7 +99,11 @@ impl BlockDataProvider for RpcBlockDataProvider {
         Ok(all_blocks)
     }
 
-    async fn get_accounts(&self, accounts: &[Address]) -> RaikoResult<Vec<AccountInfo>> {
+    async fn get_accounts(
+        &self,
+        block_number: u64,
+        accounts: &[Address],
+    ) -> RaikoResult<Vec<AccountInfo>> {
         let mut all_accounts = Vec::with_capacity(accounts.len());
 
         let max_batch_size = 250;
@@ -99,7 +119,7 @@ impl BlockDataProvider for RpcBlockDataProvider {
                     batch
                         .add_call::<_, Uint<64, 1>>(
                             "eth_getTransactionCount",
-                            &(address, Some(BlockId::from(self.block_number))),
+                            &(address, Some(BlockId::from(self.current_block_number))),
                         )
                         .map_err(|_| {
                             RaikoError::RPC(
@@ -111,7 +131,7 @@ impl BlockDataProvider for RpcBlockDataProvider {
                     batch
                         .add_call::<_, Uint<256, 4>>(
                             "eth_getBalance",
-                            &(address, Some(BlockId::from(self.block_number))),
+                            &(address, Some(BlockId::from(self.current_block_number))),
                         )
                         .map_err(|_| {
                             RaikoError::RPC("Failed adding eth_getBalance call to batch".to_owned())
@@ -121,7 +141,7 @@ impl BlockDataProvider for RpcBlockDataProvider {
                     batch
                         .add_call::<_, Bytes>(
                             "eth_getCode",
-                            &(address, Some(BlockId::from(self.block_number))),
+                            &(address, Some(BlockId::from(self.current_block_number))),
                         )
                         .map_err(|_| {
                             RaikoError::RPC("Failed adding eth_getCode call to batch".to_owned())
@@ -170,7 +190,11 @@ impl BlockDataProvider for RpcBlockDataProvider {
         Ok(all_accounts)
     }
 
-    async fn get_storage_values(&self, accounts: &[(Address, U256)]) -> RaikoResult<Vec<U256>> {
+    async fn get_storage_values(
+        &self,
+        block_number: u64,
+        accounts: &[(Address, U256)],
+    ) -> RaikoResult<Vec<U256>> {
         let mut all_values = Vec::with_capacity(accounts.len());
 
         let max_batch_size = 1000;
@@ -184,7 +208,7 @@ impl BlockDataProvider for RpcBlockDataProvider {
                     batch
                         .add_call::<_, U256>(
                             "eth_getStorageAt",
-                            &(address, key, Some(BlockId::from(self.block_number))),
+                            &(address, key, Some(BlockId::from(self.current_block_number))),
                         )
                         .map_err(|_| {
                             RaikoError::RPC(

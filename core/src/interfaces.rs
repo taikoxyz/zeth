@@ -3,7 +3,8 @@ use alloy_primitives::{Address, B256};
 use clap::Args;
 use raiko_lib::{
     input::{
-        AggregationGuestInput, AggregationGuestOutput, BlobProofType, GuestInput, GuestOutput,
+        AggregationGuestInput, AggregationGuestOutput, BlobProofType, GuestBatchInput, GuestInput,
+        GuestOutput,
     },
     proof_type::ProofType,
     prover::{IdStore, IdWrite, Proof, ProofKey, Prover, ProverError},
@@ -119,6 +120,45 @@ pub async fn run_prover(
 }
 
 /// Run the prover driver depending on the proof type.
+pub async fn run_batch_prover(
+    proof_type: ProofType,
+    input: GuestBatchInput,
+    output: &GuestOutput,
+    config: &Value,
+    store: Option<&mut dyn IdWrite>,
+) -> RaikoResult<Proof> {
+    match proof_type {
+        ProofType::Native => NativeProver::batch_run(input.clone(), output, config, store)
+            .await
+            .map_err(<ProverError as Into<RaikoError>>::into),
+        ProofType::Sp1 => {
+            #[cfg(feature = "sp1")]
+            return sp1_driver::Sp1Prover::run(input.clone(), output, config, store)
+                .await
+                .map_err(|e| e.into());
+            #[cfg(not(feature = "sp1"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+        ProofType::Risc0 => {
+            #[cfg(feature = "risc0")]
+            return risc0_driver::Risc0Prover::run(input.clone(), output, config, store)
+                .await
+                .map_err(|e| e.into());
+            #[cfg(not(feature = "risc0"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+        ProofType::Sgx => {
+            #[cfg(feature = "sgx")]
+            return sgx_prover::SgxProver::run(input.clone(), output, config, store)
+                .await
+                .map_err(|e| e.into());
+            #[cfg(not(feature = "sgx"))]
+            Err(RaikoError::FeatureNotSupportedError(proof_type))
+        }
+    }
+}
+
+/// Run the prover driver depending on the proof type.
 pub async fn aggregate_proofs(
     proof_type: ProofType,
     input: AggregationGuestInput,
@@ -204,6 +244,8 @@ pub struct ProofRequest {
     pub block_number: u64,
     /// The l1 block number of the l2 block be proposed.
     pub l1_inclusion_block_number: u64,
+    /// The l2_l1 block pairs for batch proof generation.
+    pub l2_l1_block_pairs: Vec<(u64, Option<u64>)>,
     /// The network to generate the proof for.
     pub network: String,
     /// The L1 network to generate the proof for.
@@ -234,6 +276,10 @@ pub struct ProofRequestOpt {
     /// in hekla, it is the anchored l1 block height - 1
     /// in ontake, it is the anchored l1 block height - (1..64)
     pub l1_inclusion_block_number: Option<u64>,
+    /// To support batch proof generation.
+    /// The block numbers and l1 inclusion block numbers for the blocks to aggregate proofs for.
+    /// This is used for batch proof generation.
+    pub l2_l1_block_pairs: Vec<u64>,
     #[arg(long, require_equals = true)]
     /// The network to generate the proof for.
     pub network: Option<String>,
@@ -318,6 +364,11 @@ impl TryFrom<ProofRequestOpt> for ProofRequest {
             network: value.network.ok_or(RaikoError::InvalidRequestConfig(
                 "Missing network".to_string(),
             ))?,
+            l2_l1_block_pairs: value
+                .l2_l1_block_pairs
+                .iter()
+                .map(|&v| (v, None))
+                .collect(),
             l1_network: value.l1_network.ok_or(RaikoError::InvalidRequestConfig(
                 "Missing l1_network".to_string(),
             ))?,
@@ -397,6 +448,7 @@ impl From<AggregationRequest> for Vec<ProofRequestOpt> {
                 |&(block_number, l1_inclusion_block_number)| ProofRequestOpt {
                     block_number: Some(block_number),
                     l1_inclusion_block_number,
+                    l2_l1_block_pairs: Vec::new(),
                     network: value.network.clone(),
                     l1_network: value.l1_network.clone(),
                     graffiti: value.graffiti.clone(),
@@ -407,6 +459,23 @@ impl From<AggregationRequest> for Vec<ProofRequestOpt> {
                 },
             )
             .collect()
+    }
+}
+
+impl From<AggregationRequest> for ProofRequestOpt {
+    fn from(value: AggregationRequest) -> Self {
+        ProofRequestOpt {
+            block_number: None,
+            l1_inclusion_block_number: None,
+            l2_l1_block_pairs: value.block_numbers.iter().map(|(id, _)| *id).collect(),
+            network: value.network,
+            l1_network: value.l1_network,
+            graffiti: value.graffiti,
+            prover: value.prover,
+            proof_type: value.proof_type,
+            blob_proof_type: value.blob_proof_type,
+            prover_args: value.prover_args,
+        }
     }
 }
 

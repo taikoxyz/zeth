@@ -66,6 +66,48 @@ impl Prover for NativeProver {
         })
     }
 
+    async fn batch_run(
+        input: raiko_lib::input::GuestBatchInput,
+        output: &GuestOutput,
+        config: &ProverConfig,
+        store: Option<&mut dyn IdWrite>,
+    ) -> ProverResult<Proof> {
+        let param =
+            config
+                .get("native")
+                .map(NativeParam::deserialize)
+                .ok_or(ProverError::Param(serde_json::Error::custom(
+                    "native param not provided",
+                )))??;
+
+        if let Some(path) = param.json_guest_input {
+            let path = Path::new(&path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let json = serde_json::to_string(&input)?;
+            std::fs::write(path, json)?;
+        }
+
+        trace!("Running the native prover for input {input:?}");
+
+        let pi = ProtocolInstance::new_batch(&input, &output.header, ProofType::Native)
+            .map_err(|e| ProverError::GuestError(e.to_string()))?;
+        if pi.instance_hash() != output.hash {
+            return Err(ProverError::GuestError(
+                "Protocol Instance hash not matched".to_string(),
+            ));
+        }
+
+        Ok(Proof {
+            input: None,
+            proof: None,
+            quote: None,
+            uuid: None,
+            kzg_proof: None,
+        })
+    }
+
     async fn cancel(_proof_key: ProofKey, _read: Box<&mut dyn IdStore>) -> ProverResult<()> {
         Ok(())
     }

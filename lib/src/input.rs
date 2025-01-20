@@ -43,6 +43,13 @@ pub struct GuestInput {
     pub taiko: TaikoGuestInput,
 }
 
+/// External block input.
+#[serde_as]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct GuestBatchInput {
+    pub inputs: Vec<GuestInput>,
+}
+
 /// External aggregation input.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct AggregationGuestInput {

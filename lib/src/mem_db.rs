@@ -83,6 +83,11 @@ impl DbAccount {
     }
 }
 
+// todo: make batch mem db a LRU cache db, then we don't need to fetch
+// everything from provider as long as we execute in-sequence blocks
+pub struct BatchMemDb {
+    pub dbs: Vec<MemDb>,
+}
 /// In-memory EVM database.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MemDb {
@@ -132,6 +137,24 @@ impl MemDb {
                 entry.insert(block_hash);
             }
         };
+    }
+
+    pub fn merge(&mut self, other: MemDb) {
+        for (address, account) in other.accounts {
+            match self.accounts.entry(address) {
+                Entry::Occupied(mut entry) => {
+                    let db_account = entry.get_mut();
+                    assert_eq!(db_account.info, account.info);
+                    assert_eq!(db_account.state, account.state);
+                    db_account.storage.extend(account.storage);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(account);
+                }
+            }
+        }
+
+        self.block_hashes.extend(other.block_hashes);
     }
 }
 

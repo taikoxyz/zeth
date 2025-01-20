@@ -21,9 +21,10 @@ use raiko_lib::{
     primitives::eip4844::{self, commitment_to_version_hash, KZG_SETTINGS},
 };
 use reth_evm_ethereum::taiko::{decode_anchor, decode_anchor_ontake};
-use reth_primitives::Block;
+use reth_primitives::Block as RethBlock;
 use reth_revm::primitives::SpecId;
 use serde::{Deserialize, Serialize};
+use std::iter;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -33,7 +34,7 @@ use crate::{
 };
 
 /// Optimize data gathering by executing the transactions multiple times so data can be requested in batches
-pub async fn execute_txs<BDP>(builder: &mut RethBlockBuilder<ProviderDb<BDP>>) -> RaikoResult<()>
+pub async fn execute_txs<'a, BDP>(builder: &mut RethBlockBuilder<ProviderDb<'a, BDP>>) -> RaikoResult<()>
 where
     BDP: BlockDataProvider,
 {
@@ -71,9 +72,9 @@ pub async fn prepare_taiko_chain_input(
     taiko_chain_spec: &ChainSpec,
     block_number: u64,
     l1_inclusion_block_number: Option<u64>,
-    block: &Block,
+    block: &RethBlock,
     prover_data: TaikoProverData,
-    blob_proof_type: BlobProofType,
+    blob_proof_type: &BlobProofType,
 ) -> RaikoResult<TaikoGuestInput> {
     // Decode the anchor tx to find out which L1 blocks we need to fetch
     let anchor_tx = block
@@ -157,7 +158,7 @@ pub async fn prepare_taiko_chain_input(
             expected_blob_hash,
             l1_inclusion_header.timestamp,
             l1_chain_spec,
-            &blob_proof_type,
+            blob_proof_type,
         )
         .await?
     } else {
@@ -193,8 +194,41 @@ pub async fn prepare_taiko_chain_input(
         block_proposed,
         prover_data,
         blob_proof,
-        blob_proof_type,
+        blob_proof_type: blob_proof_type.clone(),
     })
+}
+
+/// Prepare the input for a Taiko chain
+pub async fn prepare_taiko_chain_batch_input(
+    l1_chain_spec: &ChainSpec,
+    taiko_chain_spec: &ChainSpec,
+    l2_l1_block_pairs: Vec<(u64, Option<u64>)>,
+    blocks: &[RethBlock],
+    prover_data: TaikoProverData,
+    blob_proof_type: &BlobProofType,
+) -> RaikoResult<Vec<TaikoGuestInput>> {
+    let mut batch_inputs = Vec::with_capacity(l2_l1_block_pairs.len());
+    for (l2_block_number, l1_inclusion_block_number) in l2_l1_block_pairs {
+        let block = blocks
+            .iter()
+            .find(|block| block.number == l2_block_number)
+            .ok_or_else(|| {
+                RaikoError::Preflight("No block for requested block number".to_owned())
+            })?;
+
+        let input = prepare_taiko_chain_input(
+            l1_chain_spec,
+            taiko_chain_spec,
+            l2_block_number,
+            l1_inclusion_block_number,
+            block,
+            prover_data.clone(),
+            blob_proof_type,
+        )
+        .await?;
+        batch_inputs.push(input);
+    }
+    Ok(batch_inputs)
 }
 
 pub async fn get_tx_data(
@@ -431,7 +465,7 @@ pub async fn get_block_proposed_event_by_traversal(
 pub async fn get_block_and_parent_data<BDP>(
     provider: &BDP,
     block_number: u64,
-) -> RaikoResult<(Block, alloy_rpc_types::Block)>
+) -> RaikoResult<(RethBlock, alloy_rpc_types::Block)>
 where
     BDP: BlockDataProvider,
 {
@@ -461,9 +495,50 @@ where
     debug!("block transactions: {:?}", block.transactions.len());
 
     // Convert the alloy block to a reth block
-    let block = Block::try_from(block.clone())
+    let block = RethBlock::try_from(block.clone())
         .map_err(|e| RaikoError::Conversion(format!("Failed converting to reth block: {e}")))?;
     Ok((block, parent_block.clone()))
+}
+
+pub async fn get_batch_blocks_and_parent_data<BDP>(
+    provider: &BDP,
+    block_numbers: &[u64],
+) -> RaikoResult<Vec<(RethBlock, alloy_rpc_types::Block)>>
+where
+    BDP: BlockDataProvider,
+{
+    let target_blocks = iter::once(block_numbers[0] - 1)
+        .chain(block_numbers.iter().cloned())
+        .enumerate()
+        .map(|(i, block_number)| (block_number, i == 0))
+        .collect::<Vec<(u64, bool)>>();
+    // Get the block and the parent block
+    let blocks = provider.get_blocks(&target_blocks).await?;
+    assert!(blocks.len() == block_numbers.len() + 1);
+
+    info!(
+        "Processing {} blocks with (num, hash) from:({:?}, {:?}) to ({:?}, {:?})",
+        block_numbers.len(),
+        blocks.first().unwrap().header.number,
+        blocks.first().unwrap().header.hash.unwrap(),
+        blocks.first().unwrap().header.number,
+        blocks.last().unwrap().header.hash.unwrap(),
+    );
+
+    let pairs = blocks
+        .windows(2)
+        .map(|window_blocks| {
+            let parent_block = &window_blocks[0];
+            let prove_block = RethBlock::try_from(window_blocks[1].clone())
+                .map_err(|e| {
+                    RaikoError::Conversion(format!("Failed converting to reth block: {e}"))
+                })
+                .unwrap();
+            (prove_block, parent_block.clone())
+        })
+        .collect();
+
+    Ok(pairs)
 }
 
 pub async fn get_headers<BDP>(provider: &BDP, (a, b): (u64, u64)) -> RaikoResult<(Header, Header)>

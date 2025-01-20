@@ -1,6 +1,7 @@
 use core::mem;
 use std::sync::Arc;
 
+use crate::input::GuestBatchInput;
 use crate::primitives::keccak::keccak;
 use crate::primitives::mpt::StateAccount;
 use crate::utils::generate_transactions;
@@ -8,7 +9,7 @@ use crate::{
     consts::{ChainSpec, MAX_BLOCK_HASH_AGE},
     guest_mem_forget,
     input::GuestInput,
-    mem_db::{AccountState, DbAccount, MemDb},
+    mem_db::{AccountState, BatchMemDb, DbAccount, MemDb},
     CycleTracker,
 };
 use anyhow::{bail, ensure, Result};
@@ -28,6 +29,24 @@ use reth_primitives::{Address, BlockWithSenders, Header, B256, KECCAK_EMPTY, U25
 use tracing::{debug, error};
 
 pub fn calculate_block_header(input: &GuestInput) -> Header {
+    let cycle_tracker = CycleTracker::start("initialize_database");
+    let db = create_mem_db(&mut input.clone()).unwrap();
+    cycle_tracker.end();
+
+    let mut builder = RethBlockBuilder::new(input, db);
+
+    let cycle_tracker = CycleTracker::start("execute_transactions");
+    builder.execute_transactions(false).expect("execute");
+    cycle_tracker.end();
+
+    let cycle_tracker = CycleTracker::start("finalize");
+    let header = builder.finalize().expect("execute");
+    cycle_tracker.end();
+
+    header
+}
+
+pub fn calculate_batch_blocks_final_header(input: &GuestInput) -> Header {
     let cycle_tracker = CycleTracker::start("initialize_database");
     let db = create_mem_db(&mut input.clone()).unwrap();
     cycle_tracker.end();

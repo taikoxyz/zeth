@@ -503,6 +503,7 @@ pub async fn handle_proof(
     // Execute the proof generation.
     let total_time = Measurement::start("", false);
 
+    let batch_mode = proof_request.l2_l1_block_pairs.is_some();
     let raiko = Raiko::new(
         l1_chain_spec.clone(),
         taiko_chain_spec.clone(),
@@ -595,6 +596,7 @@ mod tests {
         actor.pending_tasks.lock().await.push_back(ProofRequest {
             block_number: 1,
             l1_inclusion_block_number: 1,
+            l2_l1_block_pairs: None,
             network: "test".to_string(),
             l1_network: "test".to_string(),
             graffiti: B256::ZERO,
@@ -668,6 +670,7 @@ mod tests {
             actor.pending_tasks.lock().await.push_back(ProofRequest {
                 block_number: 1,
                 l1_inclusion_block_number: 1,
+                l2_l1_block_pairs: None,
                 network: "test".to_string(),
                 l1_network: "test".to_string(),
                 graffiti: B256::ZERO,
